@@ -5,11 +5,14 @@
 
 ## 一、怎么跑
 
-1. 安装 **Godot 4.7 标准版**（非 .NET / C# 版）
-2. 打开 Godot → **导入** → 选中本目录的 `project.godot` → 导入并编辑
-3. 按 **F5**（或右上角 ▶ 播放）运行
+仓库里已经带了 **Godot 4.7.1**，不用单独装引擎。
 
-> 分发给其他策划：每人拷一份工程（或导出的 exe），用同一版 Godot 打开即可。不必同屏。
+1. `git clone https://github.com/wangx5910/DMZ_2D_DEMO.git`
+2. 双击 **`运行游戏.bat`**
+
+需要改场景时，双击 **`打开编辑器.bat`**。
+
+> 克隆请装 [Git LFS](https://git-lfs.com)（`git lfs install`）。没装的话会只下到一个几 KB 的指针文件，点 bat 打不开。
 
 ## 一-b、局域网对战（策划联机）
 
