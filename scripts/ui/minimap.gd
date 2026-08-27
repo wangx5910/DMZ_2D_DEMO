@@ -26,6 +26,7 @@ func _ready() -> void:
 	_canvas = Control.new()
 	_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_canvas.clip_contents = true
 	_canvas.draw.connect(_draw_map)
 	add_child(_canvas)
 
@@ -76,19 +77,21 @@ func _draw_map() -> void:
 	if full_screen:
 		center = Vector2(world_px, world_px) * 0.5
 		scale = rect.size.x / world_px
+		# 挡住地图方块四周露出来的世界层箱子图标
+		c.draw_rect(Rect2(Vector2.ZERO, _vp()), Color(0.04, 0.05, 0.07, 1.0), true)
 	else:
 		center = player.global_position
 		scale = rect.size.x / (Tuning.minimap_range_m * 2.0 * PX_PER_M)
 
-	# 底板
-	c.draw_rect(rect, Color(0.055, 0.065, 0.085, 0.92 if full_screen else 0.82), true)
+	# 底板必须不透明，否则世界里的箱子会透上来
+	c.draw_rect(rect, Color(0.055, 0.065, 0.085, 1.0), true)
 
 	_draw_districts(c, rect, center, scale)
 	_draw_arterials(c, rect, center, scale)
 	_draw_pois(c, rect, center, scale)
 	if full_screen:
 		_draw_grid_overlay(c, rect, center, scale, world_px)
-	_draw_containers(c, rect, center, scale)
+	_draw_free_safes(c, rect, center, scale)
 	_draw_vehicles(c, rect, center, scale)
 	_draw_extraction(c, rect, center, scale)
 	_draw_depots(c, rect, center, scale)
@@ -161,25 +164,22 @@ func _draw_pois(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
 			c.draw_string(_font, label_pos, str(pd.get("name", "")),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col.lightened(0.3))
 
-## 容器点位——这是你最关心的"能不能搜到东西"的直接读数
-func _draw_containers(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
-	var nodes := get_tree().get_nodes_in_group("containers")
-	for n in nodes:
+## 地图只标免保。武器箱 / 杂物箱 / 高保一律不画。
+func _draw_free_safes(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
+	for n in get_tree().get_nodes_in_group("free_safe"):
+		if not is_instance_valid(n):
+			continue
+		if bool(n.get("is_corpse_bag")):
+			continue
+		var rich := str(n.get("richness"))
+		if rich == "L1" or rich == "L2" or rich == "L3":
+			continue
 		var mp := _w2m(n.global_position, rect, center, scale)
 		if not rect.has_point(mp):
 			continue
-		var col := Color(0.48, 0.48, 0.48)
-		match str(n.richness):
-			"L1": col = Color(0.46, 0.46, 0.46)
-			"L2": col = Color(0.42, 0.52, 0.62)
-			"L3": col = Color(0.56, 0.46, 0.66)
-			"L4": col = Color(0.92, 0.70, 0.24)
-		var r: float = 2.4 if full_screen else 2.9
-		if n.is_in_group("free_safe"):
-			col = Color(1.0, 0.84, 0.20)
-			r = 4.5 if full_screen else 5.2
-		# 已搜完的容器画空心（去过哪里的记忆）
-		if n.is_fully_searched():
+		var col := Color(1.0, 0.84, 0.20)
+		var r: float = 4.5 if full_screen else 5.2
+		if n.has_method("is_fully_searched") and n.is_fully_searched():
 			c.draw_arc(mp, r, 0, TAU, 10, col * Color(1, 1, 1, 0.6), 1.2)
 		else:
 			c.draw_circle(mp, r, col)
@@ -202,82 +202,6 @@ func _draw_vehicles(c: Control, rect: Rect2, center: Vector2, scale: float) -> v
 			col = Color(0.95, 0.85, 0.40, 0.9)
 		# 用小方块区别于容器的圆点
 		c.draw_rect(Rect2(mp - Vector2(3.2, 2.2), Vector2(6.4, 4.4)), col, true)
-
-## 敌人：只画**已发现玩家的**（追击/交战/警觉），未发现的不显示 ——
-## 否则小地图变成透视挂，信息博弈就废了
-func _draw_enemies(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
-	if not Tuning.enable_enemies:
-		return
-	# 劫持弱信息：飞船被劫持后，附近敌人即便未警觉也以橙色弱信息显示
-	var hijack_on: bool = world != null and world.is_hijack_active()
-	var intel_r: float = Tuning.hijack_intel_radius
-	for e in get_tree().get_nodes_in_group("enemies"):
-		if not is_instance_valid(e):
-			continue
-		var st: int = e.state
-		# 0=PATROL 1=ALERT 2=CHASE 3=ENGAGE 5=INVESTIGATE
-		var aggro: bool = st == 1 or st == 2 or st == 3
-		if not (aggro or Tuning.show_enemy_debug or full_screen):
-			# 未警觉：平时完全不显示；劫持激活时仅显示 hijack_intel_radius 内附近敌人
-			if hijack_on:
-				if e.global_position.distance_to(player.global_position) > intel_r:
-					continue
-			else:
-				continue
-		var mp := _w2m(e.global_position, rect, center, scale)
-		if not rect.has_point(mp):
-			continue
-		var weak: bool = hijack_on and not aggro
-		var col: Color
-		if aggro:
-			col = Color(0.95, 0.35, 0.30)
-		elif weak:
-			col = Color(0.97, 0.58, 0.18, 0.72)   # 劫持弱信息（橙黄）
-		else:
-			col = Color(0.70, 0.66, 0.55, 0.7)
-		c.draw_circle(mp, 3.4, col)
-		if aggro:
-			c.draw_arc(mp, 6.0, 0, TAU, 12, Color(col.r, col.g, col.b, 0.5), 1.2)
-
-func _draw_squad_spawns(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
-	if world == null or not ("squad_spawns" in world):
-		return
-	for s in world.squad_spawns:
-		var sid: int = int(s.get("squad_id", 0))
-		var sp: Vector2 = s.get("center", Vector2.ZERO)
-		var mp := _w2m(sp, rect, center, scale)
-		if not rect.has_point(mp):
-			continue
-		var mine: bool = sid == int(world.get("player_squad_id"))
-		var col := Color(0.35, 0.95, 0.55, 0.95) if mine else Color(0.95, 0.72, 0.28, 0.9)
-		c.draw_circle(mp, 5.5 if full_screen else 3.8, col * Color(1, 1, 1, 0.25))
-		var tip := mp + Vector2(0, -5)
-		var l := mp + Vector2(-4, 3)
-		var r := mp + Vector2(4, 3)
-		c.draw_colored_polygon(PackedVector2Array([tip, l, r]), col)
-		if full_screen:
-			c.draw_string(_font, mp + Vector2(6, -4), "出生%d" % (sid + 1),
-				HORIZONTAL_ALIGNMENT_LEFT, 60, 10, col)
-
-func _draw_raider_bots(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
-	var my_team := 0
-	if player != null:
-		my_team = int(player.get("team_id"))
-	# 友军始终画；敌方仅已感知（visible）或调试强制显示时画
-	for b in get_tree().get_nodes_in_group("raider_bots"):
-		if not is_instance_valid(b) or not (b is Node2D):
-			continue
-		var nb: Node2D = b
-		var ally: bool = int(nb.get("team_id")) == my_team
-		if not ally and not (Tuning.show_enemy_players or nb.visible):
-			continue
-		var mp := _w2m(nb.global_position, rect, center, scale)
-		if not rect.has_point(mp):
-			continue
-		var col := Color(0.35, 0.95, 0.55, 0.95) if ally else Color(1.0, 0.45, 0.28, 0.75)
-		c.draw_circle(mp, 3.6 if ally else 2.4, col)
-		if full_screen and ally:
-			c.draw_arc(mp, 5.5, 0, TAU, 12, Color(col.r, col.g, col.b, 0.5), 1.0)
 
 ## 公共撤离点：固定点，不标倍率
 func _draw_extraction(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
@@ -481,8 +405,8 @@ func _draw_labels(c: Control, rect: Rect2) -> void:
 	if full_screen:
 		var km: float = float(world.world_size_cells) * 5.0 / 1000.0
 		c.draw_string(_font, rect.position + Vector2(0, -30),
-			"海湾城全图  %.1f × %.1f km  ｜  %d 个 POI ｜ %d 个容器  ｜  [M] 关闭" % [
-				km, km, world.pois.size(), get_tree().get_nodes_in_group("containers").size()],
+			"海湾城全图  %.1f × %.1f km  ｜  %d 个 POI ｜  [M] 关闭" % [
+				km, km, world.pois.size()],
 			HORIZONTAL_ALIGNMENT_LEFT, rect.size.x, 16, Color(0.85, 0.90, 1.0))
 		_draw_map_legend(c, rect)
 	else:
@@ -571,7 +495,6 @@ func _draw_map_legend(c: Control, rect: Rect2) -> void:
 		[Color(0.90, 0.78, 0.42), "开放 POI"],
 		[Color(0.95, 0.48, 0.44), "PvP POI"],
 		[Color(1.0, 0.84, 0.20), "免保"],
-		[Color(0.70, 0.52, 0.88), "高保"],
 		[Color(0.92, 0.28, 0.28), "合约"],
 		[Color(0.35, 0.95, 0.55), "撤离点"],
 		[Color(0.82, 0.38, 1.0), "提交点"],
@@ -579,7 +502,6 @@ func _draw_map_legend(c: Control, rect: Rect2) -> void:
 		[Color(0.55, 0.85, 1.0), "飞船"],
 		[Color(0.55, 0.85, 1.0), "破解点"],
 		[Color(0.45, 0.95, 1.0), "自己"],
-		[Color(0.48, 0.48, 0.48), "容器（空心=已搜）"],
 	]
 	var row_h: float = 16.0
 	var pad: float = 8.0

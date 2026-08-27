@@ -164,6 +164,9 @@ func set_focused(on: bool) -> void:
 	queue_redraw()
 
 func _draw() -> void:
+	# 免保始终画；普通武器箱/杂物箱不当常驻地图图标，只在视野内或对准时出现
+	if not is_in_group("free_safe") and not _highlight and not _focused:
+		return
 	var base := _richness_color()
 	if is_sealed_preview:
 		base = Color(0.90, 0.45, 0.62)
