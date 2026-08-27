@@ -41,12 +41,18 @@ func _ready() -> void:
 func _ensure_rolled() -> void:
 	if _rolled:
 		return
+	fill_now(richness, cracked)
+
+## 立刻按掉落表填箱（人质房预填、免破解金箱）
+func fill_now(table_key: String, pre_cracked: bool = false) -> void:
 	_rolled = true
-	slots = GameData.roll_container(richness)
+	cracked = pre_cracked
+	slots = GameData.roll_container(table_key)
 	revealed.resize(slots.size())
 	taken.resize(slots.size())
 	revealed.fill(false)
 	taken.fill(false)
+	queue_redraw()
 
 ## 用已有物品列表做成可搜刮容器（怪物/AI 死亡掉落的背包）
 func setup_corpse_bag(item_ids: Array, bag_label: String = "尸体背包", search_tier: String = "L2", stash_ids: Array = []) -> void:

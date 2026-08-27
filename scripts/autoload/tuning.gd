@@ -167,7 +167,8 @@ var enable_spaceship_hijack: bool = true    ## 飞船劫持 / 破解点机制总
 var enable_contracts: bool = true           ## 动态合约
 var contract_spawn_time: float = 0.0        ## 人质任务刷出时间（已改为开局即刷，此项不再延迟）
 var contract_hostage_time: float = 360.0    ## 救援人质时限（秒，接取后倒计时）
-var contract_hostage_guards: int = 12       ## 人质附近驻守怪物数
+var contract_hostage_guards: int = 12       ## 人质附近驻守怪物数（越近越密）
+var contract_hostage_chests: int = 5        ## 人质房紫色箱数量（另有 1 个免保级金箱）
 var contract_extract_m: float = 600.0       ## 人质撤离点距离（米）
 var contract_extract_radius: float = 90.0   ## 人质撤离圈半径（像素）
 var contract_extract_hold: float = 8.0      ## 人质撤离驻守时长（秒）
@@ -329,6 +330,7 @@ const SPEC := {
 		["spaceship_crack_range", 120.0, 900.0],
 		["contract_hostage_time", 60.0, 900.0],
 		["contract_hostage_guards", 0.0, 24.0],
+		["contract_hostage_chests", 2.0, 10.0],
 		["contract_extract_m", 200.0, 1500.0],
 		["contract_extract_hold", 2.0, 30.0],
 		["hostage_hp", 20.0, 200.0],

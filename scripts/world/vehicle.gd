@@ -53,8 +53,8 @@ func _ready() -> void:
 	add_to_group("vehicles")
 	add_to_group("interactables")
 	collision_layer = 1 << 5          # vehicle 层
-	# 和世界墙体碰撞。不与玩家/敌人碰撞层互推 —— 2D 俯视下车挤人会把人塞进墙里。
-	collision_mask = 1 << 0
+	# 墙体 + 打开的大门（行人可通过，车永远撞）
+	collision_mask = (1 << 0) | (1 << 7)
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	z_index = 6
 

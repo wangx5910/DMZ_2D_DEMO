@@ -153,7 +153,7 @@ func search_time_mul(richness: String) -> float:
 	match richness:
 		"L1": return Tuning.search_time_mul_l1
 		"L2": return Tuning.search_time_mul_l2
-		"L3": return Tuning.search_time_mul_l3
+		"L3", "hostage": return Tuning.search_time_mul_l3
 		"L4": return Tuning.search_time_mul_l4
 	return 1.0
 

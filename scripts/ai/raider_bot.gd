@@ -63,6 +63,7 @@ var _current_goal := Vector2.INF
 var _stuck_flips := 0
 var _detour := Vector2.INF
 var _detour_t := 0.0
+var _clear_streak := 0.0
 
 # 性能缓存
 var _think_cd := 0.0
@@ -83,6 +84,8 @@ var _cover_node = null
 var _cover_scan_cd := 0.0
 var _hold_t := 0.0
 var _peek_t := 0.0
+var _seek_t := 0.0
+var _perceive_hold := 0
 
 ## 冲免保晃荡：总预算约行程时间的 10%
 var _wander_budget := 0.0
@@ -351,9 +354,9 @@ func _tick_lod_far(delta: float) -> void:
 func _finish_open_safe_lod() -> void:
 	if target_safe == null or not is_instance_valid(target_safe):
 		return
-	if str(target_safe.get("richness")) == "L4" and not bool(target_safe.get("cracked")):
-		target_safe.cracked = true
+	_vacuum_container(target_safe)
 	first_safe_done = true
+	state = S.LOOT
 
 func _want_contest_ship() -> bool:
 	if world == null or not Tuning.enable_spaceship_hijack:
@@ -595,8 +598,6 @@ func _enter_combat(who) -> void:
 	var prev = combat_target
 	if entering:
 		_resume_state = state
-		if _resume_state == S.OPEN_SAFE:
-			_resume_state = S.RUSH_SAFE
 		_abort_search()
 		_last_goal_dist = -1.0
 		_wall_follow = 0
@@ -650,6 +651,7 @@ func _clear_cover_combat() -> void:
 	_cover_node = null
 	_hold_t = 0.0
 	_peek_t = 0.0
+	_seek_t = 0.0
 
 func _try_pick_cover(threat_pos: Vector2) -> void:
 	_cover_scan_cd = 0.45
@@ -662,6 +664,7 @@ func _try_pick_cover(threat_pos: Vector2) -> void:
 	_combat_phase = CombatPhase.SEEK_COVER
 	_hold_t = 0.0
 	_peek_t = 0.0
+	_seek_t = 0.0
 
 func _find_nearby_cover(threat_pos: Vector2, max_d: float):
 	var best = null
@@ -700,13 +703,16 @@ func _tick_cover_combat(delta: float, tpos: Vector2, d: float, see: bool) -> voi
 		CombatPhase.SEEK_COVER:
 			var behind: Vector2 = cover.stand_behind(tpos)
 			_move_towards(behind, Tuning.walk_speed, delta)
-			if global_position.distance_to(behind) <= COVER_ARRIVE:
+			_seek_t += delta
+			if global_position.distance_to(behind) <= COVER_ARRIVE or _seek_t > 1.15:
 				_combat_phase = CombatPhase.HOLD
 				_hold_t = _rng.randf_range(0.35, 0.75)
 				velocity = Vector2.ZERO
 		CombatPhase.HOLD:
 			var behind2: Vector2 = cover.stand_behind(tpos)
-			if global_position.distance_to(behind2) > COVER_ARRIVE * 1.4:
+			# 只有站位仍在附近、且这一步走得动时才回撤，避免顶进墙再被弹开
+			if global_position.distance_to(behind2) > COVER_ARRIVE * 1.4 \
+					and _path_clear((behind2 - global_position).normalized(), minf(PROBE_LEN, global_position.distance_to(behind2))):
 				_move_towards(behind2, Tuning.walk_speed * 0.85, delta)
 			else:
 				velocity = velocity.move_toward(Vector2.ZERO, Tuning.accel * delta)
@@ -1018,9 +1024,14 @@ func _begin_search(c) -> void:
 	_search_elapsed = 0.0
 	_search_slot = -1
 	_take_slot = -1
-	if c.richness == "L4" and not c.cracked:
-		_search_phase = SearchPhase.CRACK
-	elif not c.is_fully_searched():
+	if c.is_in_group("free_safe") or str(c.richness) == "L4":
+		if str(c.richness) == "L4" and not c.cracked:
+			_search_phase = SearchPhase.CRACK
+			return
+		_vacuum_container(c)
+		_search_phase = SearchPhase.TAKE
+		return
+	if not c.is_fully_searched():
 		_search_phase = SearchPhase.REVEAL
 		_search_slot = c.next_unsearched_slot()
 	else:
@@ -1038,15 +1049,10 @@ func _tick_search(c, delta: float) -> bool:
 			if _search_elapsed < need_crack:
 				return false
 			c.cracked = true
+			_vacuum_container(c)
 			first_safe_done = true
 			_search_elapsed = 0.0
-			if c.is_fully_searched():
-				_search_phase = SearchPhase.TAKE
-				_take_slot = _next_takeable_slot(c)
-			else:
-				_search_phase = SearchPhase.REVEAL
-				_search_slot = c.next_unsearched_slot()
-			return false
+			return true
 		SearchPhase.REVEAL:
 			if _search_slot < 0:
 				_search_slot = c.next_unsearched_slot()
@@ -1132,11 +1138,37 @@ func _try_take_slot(c, idx: int) -> bool:
 	var id: String = str(c.slots[idx].get("id", ""))
 	if id == "":
 		return false
-	if inv != null and not inv.add_auto(id):
-		return false
+	if inv != null:
+		if c.is_in_group("free_safe") or str(c.richness) == "L4":
+			inv.grant_no_weight(id)
+		elif not inv.add_auto(id):
+			return false
 	c.take_slot(idx)
 	_loot_value += int(GameData.item(id).get("value", 0))
 	return true
+
+## 免保 / 远距开箱：破解完就把箱子里的东西装进背包。
+## 旧逻辑只标 cracked，物品仍留在柜里，打死 AI 尸体包是空的。
+func _vacuum_container(c) -> void:
+	if c == null or not is_instance_valid(c):
+		return
+	if c.has_method("reveal_all"):
+		c.reveal_all()
+	c.cracked = true
+	if inv == null:
+		return
+	c.slot_count()
+	for i in c.slots.size():
+		if i >= c.revealed.size() or i >= c.taken.size():
+			continue
+		if c.taken[i] or c.slots[i].is_empty():
+			continue
+		var id: String = str(c.slots[i].get("id", ""))
+		if id == "":
+			continue
+		inv.grant_no_weight(id)
+		c.take_slot(i)
+		_loot_value += int(GameData.item(id).get("value", 0))
 
 func _tick_roam(delta: float) -> void:
 	# 背包未满继续搜；满了则游荡（交战仍由 COMBAT 优先）
@@ -1174,12 +1206,17 @@ func _move_towards(goal: Vector2, speed: float, delta: float) -> void:
 		return
 	var dir := to.normalized()
 	_detour_t = maxf(0.0, _detour_t - delta)
-	# 直达：前方短探无墙
+	# 直达：前方短探无墙。贴墙时探针会抖，连续通畅才退出沿墙。
 	if _path_clear(dir, minf(PROBE_LEN, dist)):
-		_wall_follow = 0
-		_detour = Vector2.INF
-		velocity = velocity.move_toward(dir * speed, Tuning.accel * delta)
-		return
+		_clear_streak += delta
+		if _wall_follow == 0 or _clear_streak >= 0.20:
+			_wall_follow = 0
+			_detour = Vector2.INF
+			_clear_streak = 0.0
+			velocity = velocity.move_toward(dir * speed, Tuning.accel * delta)
+			return
+	else:
+		_clear_streak = 0.0
 	# 隔墙：先找能看见目标或更接近目标的旁路点，避免贴着房间外墙空转
 	if _detour != Vector2.INF and _detour_t > 0.0 \
 			and global_position.distance_to(_detour) > 22.0:
@@ -1230,7 +1267,13 @@ func _ray_blocked(from: Vector2, to: Vector2) -> bool:
 	var q := PhysicsRayQueryParameters2D.create(from, to)
 	q.collision_mask = 1 << 0
 	q.exclude = [get_rid()]
-	return not space.intersect_ray(q).is_empty()
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return false
+	var col = hit.get("collider")
+	if col != null and col.is_in_group("poi_gates") and col.has_method("open"):
+		return not bool(col.open())
+	return true
 
 func _path_clear(dir: Vector2, dist: float = PROBE_LEN) -> bool:
 	var space := get_world_2d().direct_space_state
@@ -1238,7 +1281,13 @@ func _path_clear(dir: Vector2, dist: float = PROBE_LEN) -> bool:
 		global_position, global_position + dir * dist)
 	q.collision_mask = 1 << 0
 	q.exclude = [get_rid()]
-	return space.intersect_ray(q).is_empty()
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return true
+	var col = hit.get("collider")
+	if col != null and col.is_in_group("poi_gates") and col.has_method("open"):
+		return bool(col.open())
+	return false
 
 func _choose_wall_side(base: Vector2) -> int:
 	var best_side := 1
@@ -1378,9 +1427,19 @@ func _line_clear(to: Vector2) -> bool:
 func set_perceived(v: bool) -> void:
 	if _is_local_ally():
 		visible = true
+		_perceive_hold = 2
 		return
-	# 调试开「显示敌方玩家AI」时全图可见，方便对照密度/路线
-	visible = v or Tuning.show_enemy_players
+	if Tuning.show_enemy_players:
+		visible = true
+		_perceive_hold = 2
+		return
+	if v:
+		_perceive_hold = 2
+		visible = true
+	else:
+		_perceive_hold -= 1
+		if _perceive_hold <= 0:
+			visible = false
 
 func _draw() -> void:
 	var col := Color(0.95, 0.35, 0.32)

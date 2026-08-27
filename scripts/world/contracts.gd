@@ -22,6 +22,8 @@ var offer_poi_name := ""
 var hostage_poi_name := ""
 var hostage_spawn_pos := Vector2.INF
 var _hostage_poi := {}
+var hostage_doors: Array = []
+var _hostage_prepared := false
 var status_line := ""
 var owner_team: int = -1
 var _rng := RandomNumberGenerator.new()
@@ -85,6 +87,7 @@ func spawn_opening() -> void:
 	board.setup(self, pos, "救援人质")
 	phase = Phase.OFFERED
 	status_line = "合约点已刷新：%s 免保旁（小地图高亮）" % offer_poi_name
+	_prepare_hostage_den()
 	RaidLog.log_event("contract_offered", {"poi": offer_poi_name, "type": "rescue", "beside_safe": true})
 
 func accept_from_board(b, actor = null) -> bool:
@@ -92,21 +95,20 @@ func accept_from_board(b, actor = null) -> bool:
 		return false
 	if has_active_contract():
 		return false
-	var hostage_poi: Dictionary = _pick_hostage_poi()
-	if hostage_poi.is_empty():
-		status_line = "附近没有可刷新人质的 POI"
+	if not _hostage_prepared:
+		if not _prepare_hostage_den():
+			status_line = "附近没有可关押人质的房间"
+			return false
+	if hostage_spawn_pos == Vector2.INF or _hostage_poi.is_empty():
+		status_line = "人质房间无效"
 		return false
-	var hpos: Vector2 = _corridor_near(hostage_poi, board.global_position if board != null else world.spawn_point)
 	hostage = CharacterBody2D.new()
 	hostage.set_script(HOSTAGE)
 	add_child(hostage)
-	hostage.setup(self, hpos, "人质·艾拉")
-	hostage_spawn_pos = hpos
-	_hostage_poi = hostage_poi
-	hostage_poi_name = str(hostage_poi["def"].get("name", "POI"))
-	var guards: int = int(Tuning.contract_hostage_guards)
-	if Tuning.enable_enemies and guards > 0:
-		world._spawn_in_poi(hostage_poi, guards)
+	hostage.setup(self, hostage_spawn_pos, "人质·艾拉")
+	for d in hostage_doors:
+		if is_instance_valid(d) and d.has_method("unlock"):
+			d.unlock()
 	owner_team = _actor_team(actor)
 	_remove_board()
 	time_left = Tuning.contract_hostage_time
@@ -117,6 +119,50 @@ func accept_from_board(b, actor = null) -> bool:
 	if world != null:
 		world.queue_redraw()
 	return true
+
+func _prepare_hostage_den() -> bool:
+	if world == null:
+		return false
+	hostage_doors.clear()
+	_hostage_prepared = false
+	var origin: Vector2 = board.global_position if board != null else world.spawn_point
+	var exclude: Dictionary = {}
+	if board != null and world.has_method("_poi_by_point"):
+		exclude = world._poi_by_point(board.global_position)
+	var ranked: Array = []
+	for p in world.pois:
+		ranked.append(p)
+	ranked.sort_custom(func(a, b):
+		var da: float = (a["rect"] as Rect2).get_center().distance_squared_to(origin)
+		var db: float = (b["rect"] as Rect2).get_center().distance_squared_to(origin)
+		return da < db
+	)
+	var ordered: Array = []
+	for p in ranked:
+		if not exclude.is_empty() and p == exclude:
+			continue
+		ordered.append(p)
+	if not exclude.is_empty():
+		ordered.append(exclude)
+	for p in ordered:
+		if not world.has_method("setup_hostage_den"):
+			break
+		var site: Dictionary = world.setup_hostage_den(p)
+		if site.is_empty():
+			continue
+		_hostage_poi = p
+		hostage_poi_name = str(p["def"].get("name", "POI"))
+		hostage_spawn_pos = site.get("spawn_pos", Vector2.INF)
+		hostage_doors = site.get("doors", [])
+		_hostage_prepared = hostage_spawn_pos != Vector2.INF
+		if _hostage_prepared:
+			RaidLog.log_event("hostage_den_prepared", {
+				"poi": hostage_poi_name,
+				"doors": hostage_doors.size(),
+			})
+			return true
+	push_warning("人质房间准备失败：没有合适的 POI 房间")
+	return false
 
 func on_hostage_picked(who = null) -> void:
 	if phase != Phase.ACTIVE and phase != Phase.EXTRACT:

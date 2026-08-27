@@ -72,22 +72,34 @@ func _add_occluder() -> void:
 	occ.occluder = poly
 	add_child(occ)
 
-## 站在掩体后（相对威胁的反侧）
-func stand_behind(threat_pos: Vector2) -> Vector2:
-	var away := global_position - threat_pos
-	if away.length_squared() < 1.0:
-		away = -wall_dir
-	return global_position + away.normalized() * 22.0
+func _into_corridor() -> Vector2:
+	if wall_dir.length_squared() < 0.01:
+		return Vector2.DOWN
+	return -wall_dir.normalized()
 
-## peek：从掩体侧面探出
+func _along_corridor() -> Vector2:
+	return _into_corridor().orthogonal()
+
+## 站在掩体后：必须留在甬道可行走侧。旧版沿“远离威胁”推 22px，
+## 威胁在甬道里时这个方向就是墙内，AI 会顶墙抖动。
+func stand_behind(threat_pos: Vector2) -> Vector2:
+	var into := _into_corridor()
+	var along := _along_corridor()
+	var away := global_position - threat_pos
+	var s: float = signf(away.dot(along))
+	if s == 0.0:
+		s = 1.0
+	return global_position + into * 14.0 + along * s * 12.0
+
+## peek：沿甬道探出，同样不往墙里走
 func peek_point(threat_pos: Vector2) -> Vector2:
+	var into := _into_corridor()
+	var along := _along_corridor()
 	var to_threat := threat_pos - global_position
-	if to_threat.length_squared() < 1.0:
-		to_threat = -wall_dir
-	var side := to_threat.normalized().orthogonal()
-	if side.dot(wall_dir) > 0.0:
-		side = -side
-	return global_position + side * 20.0 + to_threat.normalized() * 6.0
+	var s: float = signf(to_threat.dot(along))
+	if s == 0.0:
+		s = 1.0
+	return global_position + into * 14.0 + along * s * 22.0
 
 func _draw() -> void:
 	draw_rect(Rect2(-half, half * 2.0), Color(0.42, 0.36, 0.28), true)

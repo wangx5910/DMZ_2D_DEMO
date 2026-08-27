@@ -443,6 +443,14 @@ func _scan_interactable() -> void:
 		if d3 <= best_d:
 			best_d = d3
 			best = d
+	for g in get_tree().get_nodes_in_group("poi_gates"):
+		if not is_instance_valid(g):
+			continue
+		var gp: Vector2 = g.closest_point(global_position) if g.has_method("closest_point") else g.global_position
+		var d4 := global_position.distance_squared_to(gp)
+		if d4 <= best_d:
+			best_d = d4
+			best = g
 	if best != _interact_target:
 		_interact_target = best
 		interact_target_changed.emit(best)
@@ -488,6 +496,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				NetHub.request_vehicle_exit(int(vehicle.net_id))
 			else:
 				_exit_vehicle()
+			return
+		# 大门优先于上车：门口停着车时仍能开门，不能开车进 POI
+		if _interact_target != null and _interact_target.is_in_group("poi_gates") \
+				and _interact_target.has_method("try_interact"):
+			_interact_target.try_interact(self)
 			return
 		var veh = _nearest_boardable_vehicle()
 		if veh != null:

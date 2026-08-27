@@ -70,6 +70,8 @@ var _wall_follow := 0                 ## 沿墙行走的旋向（0 = 不在沿�
 var _detour_timer := 0.0              ## 当前旋向的保持计时
 var _progress_timer := 0.0            ## 进展采样窗口计时
 var _last_goal_dist := -1.0           ## 上一次采样时到目标的距离
+var _clear_streak := 0.0              ## 直线通畅持续多久才退出沿墙（防贴墙闪）
+var _perceive_hold := 0               ## 连续不可见才隐藏，避免贴墙闪烁
 
 const PROBE_LEN := 52.0               ## 绕行探测射线长度（略大于体型+余量）
 const PROBE_ANGLES := [30.0, 55.0, 80.0, 105.0, 130.0, 155.0]
@@ -522,12 +524,17 @@ func _move_towards(goal: Vector2, speed: float, delta: float) -> void:
 		return
 	var dir := to.normalized()
 
-	# 1) 直线通畅 → 直走，并结束沿墙模式
+	# 1) 直线通畅 → 直走。贴墙时探针会一帧空一帧撞，必须连续通畅才退出沿墙。
 	if _path_clear(dir):
-		_wall_follow = 0
-		_detour_timer = 0.0
-		velocity = velocity.move_toward(dir * speed, Tuning.accel * delta)
-		return
+		_clear_streak += delta
+		if _wall_follow == 0 or _clear_streak >= 0.20:
+			_wall_follow = 0
+			_detour_timer = 0.0
+			_clear_streak = 0.0
+			velocity = velocity.move_toward(dir * speed, Tuning.accel * delta)
+			return
+	else:
+		_clear_streak = 0.0
 
 	# 2) 前方有墙 → 沿墙走。**一旦选定旋向就保持不动**，直到绕过去（_path_clear 重新为真）
 	#    或彻底卡死（_on_navigation_giveup 翻到另一侧再试）。
@@ -546,7 +553,13 @@ func _path_clear(dir: Vector2, dist: float = PROBE_LEN) -> bool:
 		global_position, global_position + dir * dist)
 	q.collision_mask = 1 << 0
 	q.exclude = [get_rid()]
-	return space.intersect_ray(q).is_empty()
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return true
+	var col = hit.get("collider")
+	if col != null and col.is_in_group("poi_gates") and col.has_method("open"):
+		return bool(col.open())
+	return false
 
 ## 选沿墙旋向：两侧各探一次，选"能更快绕开"的那侧（探到通路所需偏转角更小）。
 ## 随机选旋向的问题是可能选到墙更长的那一侧，绕一大圈甚至绕不出来。
@@ -662,6 +675,8 @@ func _on_navigation_giveup() -> void:
 func unstick_from_walls() -> void:
 	if state == State.DEAD:
 		return
+	# 只在中心嵌进固体时才弹开。用 RADIUS+余量会把“贴墙/贴掩体”当成嵌入，
+	# 每 24 帧传送一次，看起来就是闪烁。
 	if not _point_in_wall(global_position):
 		return
 	for ring in range(1, 14):
@@ -683,12 +698,17 @@ func _point_in_wall(pos: Vector2) -> bool:
 		return false
 	var q := PhysicsShapeQueryParameters2D.new()
 	var circle := CircleShape2D.new()
-	circle.radius = RADIUS + 1.5
+	circle.radius = 4.0
 	q.shape = circle
 	q.transform = Transform2D(0.0, pos)
 	q.collision_mask = 1 << 0
 	q.exclude = [get_rid()]
-	return not space.intersect_shape(q, 1).is_empty()
+	for hit in space.intersect_shape(q, 4):
+		var col = hit.get("collider")
+		if col != null and col.is_in_group("cover"):
+			continue
+		return true
+	return false
 
 func _face(pos: Vector2, delta: float, rate: float) -> void:
 	var to := pos - global_position
@@ -715,7 +735,17 @@ func _pick_new_strafe() -> void:
 func set_perceived(v: bool) -> void:
 	# 调试可视化开着时无视视野遮蔽 —— 跑测时要能一眼看到全场 AI 的分布与状态，
 	# 否则「AI 密度够不够」「有没有人罚站」这类问题根本没法看。
-	visible = v or Tuning.show_enemy_debug
+	if Tuning.show_enemy_debug:
+		visible = true
+		_perceive_hold = 2
+		return
+	if v:
+		_perceive_hold = 2
+		visible = true
+	else:
+		_perceive_hold -= 1
+		if _perceive_hold <= 0:
+			visible = false
 
 # ── 绘制（占位美术）────────────────────────────────────
 func _draw() -> void:

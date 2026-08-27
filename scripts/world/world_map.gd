@@ -37,6 +37,7 @@ var vehicle_script := preload("res://scripts/world/vehicle.gd")
 var spaceship_script := preload("res://scripts/world/spaceship.gd")
 var contracts_script := preload("res://scripts/world/contracts.gd")
 var depot_script := preload("res://scripts/world/depot.gd")
+var gate_script := preload("res://scripts/world/poi_gate.gd")
 var vehicles_root: Node2D
 var enemies_root: Node2D
 var contracts = null
@@ -246,6 +247,7 @@ func _generate_pois() -> void:
 		var walls := _build_poi_walls(gen, origin, holder)
 		var safe_cell: Vector2i = _spawn_poi_containers(gen, origin, pd)
 		_spawn_poi_corridor_covers(gen, origin, holder, safe_cell)
+		_spawn_poi_gates(gen, origin, holder)
 		# 预烘焙 POI 的地板绘制数据（避免每帧重算 to_lines）
 		var floor_rects := _bake_floor_rects(gen, origin)
 		var world_rect := Rect2(
@@ -637,7 +639,10 @@ func _update_active_pois(force: bool) -> void:
 		# 关掉远处墙体的碰撞（物理开销的主要来源）
 		for body in holder.get_children():
 			if body is StaticBody2D:
-				body.set_collision_layer(((1 << 0) | (1 << 3)) if near else 0)
+				if body.has_method("apply_stream_layer"):
+					body.apply_stream_layer(near)
+				else:
+					body.set_collision_layer(((1 << 0) | (1 << 3)) if near else 0)
 		# 墙重新打开后，把穿进墙格的怪顶回空地（远处无碰撞时它们会走进墙里）
 		if near and not was:
 			call_deferred("_unstick_enemies_in_rect", r)
@@ -856,6 +861,305 @@ func _corridor_cover_info(gen, c: Vector2i) -> Dictionary:
 
 func _corridor_wall_dir(gen, c: Vector2i) -> Vector2:
 	return _corridor_cover_info(gen, c)["wd"]
+
+func _spawn_poi_gates(gen, origin: Vector2i, holder: Node2D) -> void:
+	if gen == null or not ("entrances" in gen):
+		return
+	var span: float = float(maxi(1, int(gen.cfg.corridor_w))) * TILE
+	for e in gen.entrances:
+		var cell: Vector2i = e["cell"]
+		var d: Vector2i = e.get("dir", Vector2i.RIGHT)
+		var outward := Vector2(d)
+		var pos := Vector2(
+			(origin.x + cell.x) * TILE + TILE * 0.5,
+			(origin.y + cell.y) * TILE + TILE * 0.5
+		)
+		# 门略往 POI 内侧收一点，贴在甬道口而不是墙外
+		if outward.length_squared() > 0.01:
+			pos -= outward.normalized() * 8.0
+		var node := StaticBody2D.new()
+		node.set_script(gate_script)
+		holder.add_child(node)
+		node.setup(pos, outward, span)
+
+## 开局布置人质关押点：选 POI 内房间、封锁门、富裕箱、按距离加密的守卫。
+## 人质本人等接取合约后再刷。失败返回 {}。
+func setup_hostage_den(p: Dictionary) -> Dictionary:
+	if p.is_empty() or p.get("gen") == null:
+		return {}
+	var room: Dictionary = _pick_hostage_room(p)
+	if room.is_empty():
+		return {}
+	var gen = p["gen"]
+	var origin: Vector2i = p["origin"]
+	var holder: Node2D = p.get("holder")
+	var rect: Rect2i = room["rect"]
+	var floors: Array[Vector2i] = _room_floor_cells(gen, room)
+	if floors.is_empty():
+		return {}
+	var occupied: Dictionary = {}
+	var doors: Array = []
+	for dc in room.get("doors", []):
+		var cell: Vector2i = dc
+		occupied[cell] = true
+		var outward := _room_door_outward(room, cell)
+		var pos := _cell_center(origin, cell)
+		if outward.length_squared() > 0.01:
+			pos -= outward.normalized() * 4.0
+		var gate := StaticBody2D.new()
+		gate.set_script(gate_script)
+		if holder != null:
+			holder.add_child(gate)
+		else:
+			add_child(gate)
+		gate.setup(pos, outward, TILE)
+		gate.locked = true
+		gate.is_hostage_seal = true
+		gate.queue_redraw()
+		doors.append(gate)
+
+	var wr := _room_world_rect(origin, room)
+	var in_room: Array = []
+	var gold = null
+	if get_tree() != null:
+		for n in get_tree().get_nodes_in_group("containers"):
+			if not is_instance_valid(n) or n.is_in_group("free_safe"):
+				continue
+			if not wr.has_point(n.global_position):
+				continue
+			in_room.append(n)
+			if gold == null and str(n.richness) == "L4":
+				gold = n
+			occupied[_world_to_poi_cell(origin, n.global_position)] = true
+
+	if gold != null:
+		gold.richness = "L4"
+		gold.label = "人质金箱"
+		if gold.has_method("fill_now"):
+			gold.fill_now("L4", true)
+		else:
+			gold.cracked = true
+		in_room.erase(gold)
+
+	# 先占人质落点与金箱格，再往空位填紫箱，避免叠在一起
+	var rc := Vector2(rect.get_center())
+	var spawn_cell: Vector2i = floors[0]
+	var best_sd := INF
+	for c2 in floors:
+		if occupied.has(c2):
+			continue
+		var d2: float = Vector2(c2).distance_squared_to(rc)
+		if d2 < best_sd:
+			best_sd = d2
+			spawn_cell = c2
+	occupied[spawn_cell] = true
+	var spawn_pos := _cell_center(origin, spawn_cell)
+
+	if gold == null:
+		var gcell := Vector2i(-999, -999)
+		var best_gd := -1.0
+		for c3 in floors:
+			if occupied.has(c3):
+				continue
+			var d3: float = Vector2(c3).distance_squared_to(rc)
+			if d3 > best_gd:
+				best_gd = d3
+				gcell = c3
+		if gcell.x > -900:
+			occupied[gcell] = true
+			_spawn_hostage_chest(_cell_center(origin, gcell), "L4", "人质金箱", "L4", true)
+
+	var purple_n := 0
+	for n in in_room:
+		n.richness = "L3"
+		n.label = "人质房物资箱"
+		if n.has_method("fill_now"):
+			n.fill_now("hostage", false)
+		purple_n += 1
+
+	var want_purple: int = clampi(int(Tuning.contract_hostage_chests), 3, 10)
+	want_purple = mini(want_purple, maxi(2, floors.size() - 3))
+	var free_floors: Array[Vector2i] = []
+	for c in floors:
+		if not occupied.has(c):
+			free_floors.append(c)
+	while purple_n < want_purple and not free_floors.is_empty():
+		var idx: int = _rng.randi() % free_floors.size()
+		var pcell: Vector2i = free_floors[idx]
+		free_floors.remove_at(idx)
+		occupied[pcell] = true
+		_spawn_hostage_chest(_cell_center(origin, pcell), "L3", "人质房物资箱", "hostage", false)
+		purple_n += 1
+
+	_spawn_hostage_guards(p, room, occupied)
+	return {"spawn_pos": spawn_pos, "doors": doors, "room": room}
+
+func _pick_hostage_room(p: Dictionary) -> Dictionary:
+	var gen = p["gen"]
+	var best := {}
+	var best_score := -INF
+	for room in gen.rooms:
+		if bool(room.get("solid", false)):
+			continue
+		var doors: Array = room.get("doors", [])
+		if doors.is_empty():
+			continue
+		var rect: Rect2i = room["rect"]
+		if rect.size.x < 3 or rect.size.y < 3 or rect.get_area() < 9:
+			continue
+		var floors: Array[Vector2i] = _room_floor_cells(gen, room)
+		if floors.size() < 6:
+			continue
+		var score: float = float(rect.get_area()) + float(int(room.get("depth", 0))) * 8.0
+		if doors.size() == 1:
+			score += 48.0
+		elif doors.size() == 2:
+			score += 12.0
+		else:
+			score -= 16.0
+		if score > best_score:
+			best_score = score
+			best = room
+	return best
+
+func _room_floor_cells(gen, room: Dictionary) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var rect: Rect2i = room["rect"]
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var c := Vector2i(x, y)
+			if not _gen_is_wall(gen, c):
+				out.append(c)
+	return out
+
+func _room_world_rect(origin: Vector2i, room: Dictionary) -> Rect2:
+	var r: Rect2i = room["rect"]
+	return Rect2(
+		Vector2((origin.x + r.position.x) * TILE, (origin.y + r.position.y) * TILE),
+		Vector2(r.size.x * TILE, r.size.y * TILE))
+
+func _room_door_outward(room: Dictionary, door: Vector2i) -> Vector2:
+	var rect: Rect2i = room["rect"]
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if rect.has_point(door + d):
+			return Vector2(-d)
+	var o := Vector2(door) - Vector2(rect.get_center())
+	if o.length_squared() < 0.01:
+		return Vector2.RIGHT
+	return o.normalized()
+
+func _world_to_poi_cell(origin: Vector2i, pos: Vector2) -> Vector2i:
+	return Vector2i(int(floor(pos.x / TILE)) - origin.x, int(floor(pos.y / TILE)) - origin.y)
+
+func _spawn_hostage_chest(pos: Vector2, richness: String, box_label: String, table_key: String, pre_cracked: bool) -> void:
+	var node := Area2D.new()
+	node.set_script(container_script)
+	node.richness = richness
+	node.label = box_label
+	node.position = pos
+	add_child(node)
+	if node.has_method("fill_now"):
+		node.fill_now(table_key, pre_cracked)
+	else:
+		node.cracked = pre_cracked
+
+func _spawn_hostage_guards(p: Dictionary, room: Dictionary, occupied: Dictionary) -> void:
+	if not Tuning.enable_enemies:
+		return
+	var count: int = int(Tuning.contract_hostage_guards)
+	if count <= 0:
+		return
+	var gen = p["gen"]
+	var origin: Vector2i = p["origin"]
+	var rect: Rect2i = room["rect"]
+	var room_center := _cell_center(origin, rect.get_center())
+	var inside: Array[Vector2i] = []
+	var outside: Array[Vector2i] = []
+	var out_w: Array = []
+	for c in gen.standable_cells(true):
+		if occupied.has(c):
+			continue
+		if rect.has_point(c):
+			inside.append(c)
+			continue
+		var pos := _cell_center(origin, c)
+		var dist: float = pos.distance_to(room_center)
+		if dist > TILE * 18.0:
+			continue
+		var w: float = 1.0 / (1.0 + dist / (TILE * 4.5))
+		var md := mini(
+			mini(absi(c.x - rect.position.x), absi(c.x - (rect.end.x - 1))),
+			mini(absi(c.y - rect.position.y), absi(c.y - (rect.end.y - 1))))
+		if md <= 2:
+			w *= 3.2
+		outside.append(c)
+		out_w.append(w)
+	var inside_n: int = clampi(int(round(float(count) * 0.35)), 2, mini(5, inside.size()))
+	inside_n = mini(inside_n, inside.size())
+	var outside_n: int = mini(count - inside_n, outside.size())
+	if inside_n + outside_n < count and outside.size() > outside_n:
+		outside_n = mini(count - inside_n, outside.size())
+	var picked_in: Array[Vector2i] = _pick_unique_cells(inside, inside_n)
+	var picked_out: Array[Vector2i] = _pick_weighted_cells(outside, out_w, outside_n)
+	for cell in picked_in:
+		_spawn_grunt_at(origin, cell, inside, 72.0)
+	for cell2 in picked_out:
+		_spawn_grunt_at(origin, cell2, outside, MIN_PATROL_GAP)
+
+func _pick_unique_cells(pool: Array[Vector2i], count: int) -> Array[Vector2i]:
+	var src: Array[Vector2i] = pool.duplicate()
+	var out: Array[Vector2i] = []
+	while out.size() < count and not src.is_empty():
+		var i: int = _rng.randi() % src.size()
+		out.append(src[i])
+		src.remove_at(i)
+	return out
+
+func _pick_weighted_cells(pool: Array[Vector2i], weights: Array, count: int) -> Array[Vector2i]:
+	var w: Array = weights.duplicate()
+	var out: Array[Vector2i] = []
+	for _k in count:
+		var total := 0.0
+		for x in w:
+			total += float(x)
+		if total <= 0.0:
+			break
+		var r: float = _rng.randf() * total
+		var idx := 0
+		for j in w.size():
+			r -= float(w[j])
+			idx = j
+			if r <= 0.0:
+				break
+		if float(w[idx]) <= 0.0:
+			break
+		out.append(pool[idx])
+		w[idx] = 0.0
+	return out
+
+func _spawn_grunt_at(origin: Vector2i, cell: Vector2i, patrol_pool: Array[Vector2i], min_gap: float) -> void:
+	if enemies_root == null:
+		return
+	var pos := _cell_center(origin, cell)
+	var patrol: Array[Vector2] = []
+	if patrol_pool.size() >= 2:
+		var pts: int = mini(_rng.randi_range(2, 4), patrol_pool.size())
+		var guard := 0
+		while patrol.size() < pts and guard < 120:
+			guard += 1
+			var cand := _cell_center(origin, patrol_pool[_rng.randi() % patrol_pool.size()])
+			var too_close := cand.distance_to(pos) < min_gap
+			for existing in patrol:
+				if cand.distance_to(existing) < min_gap:
+					too_close = true
+					break
+			if too_close:
+				continue
+			patrol.append(cand)
+	var g = CharacterBody2D.new()
+	g.set_script(grunt_script)
+	enemies_root.add_child(g)
+	g.setup(pos, _fx_ref, patrol, self)
 
 func _pick_free_safe_cell(gen) -> Vector2i:
 	var center := Vector2i(gen.cfg.width / 2, gen.cfg.height / 2)
@@ -1412,6 +1716,7 @@ func add_dynamic_poi(center_world: Vector2, opts: Dictionary) -> Dictionary:
 	var upgrade: int = int(opts.get("richness_upgrade", 0))
 	var safe_cell: Vector2i = _spawn_poi_containers(gen, origin, {"name": "坠星飞船", "type": "open"}, upgrade)
 	_spawn_poi_corridor_covers(gen, origin, holder, safe_cell)
+	_spawn_poi_gates(gen, origin, holder)
 	var floor_rects := _bake_floor_rects(gen, origin)
 	var world_rect := Rect2(
 		Vector2(origin.x * TILE, origin.y * TILE),

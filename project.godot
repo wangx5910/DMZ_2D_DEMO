@@ -134,6 +134,7 @@ carry_hostage={
 2d_physics/layer_5="enemy"
 2d_physics/layer_6="vehicle"
 2d_physics/layer_7="ship_interior"
+2d_physics/layer_8="vehicle_blocker"
 
 [rendering]
 

@@ -170,11 +170,18 @@ func is_point_visible(target: Vector2, p = null) -> bool:
 	if not Tuning.enable_wall_occlusion:
 		return true
 	var space := get_world_2d().direct_space_state
-	var q := PhysicsRayQueryParameters2D.create(origin, target)
+	# 射线停在目标体表，避免贴墙时中心点埋进墙/掩体而被误判遮挡
+	var stop: Vector2 = target
+	if dist > 12.0:
+		stop = origin + to * ((dist - 10.0) / dist)
+	var q := PhysicsRayQueryParameters2D.create(origin, stop)
 	q.collision_mask = SHIP_BLOCKER_MASK if p.get("aboard_ship") != null and p.aboard_ship != null else BLOCKER_MASK
 	q.collide_with_areas = false
 	var hit := space.intersect_ray(q)
-	return hit.is_empty()
+	if hit.is_empty():
+		return true
+	# 擦到目标自己贴着的那面墙，不算被挡住
+	return hit.position.distance_to(target) <= 16.0
 
 # ── 调试可视化 ──────────────────────────────────────────
 func _draw() -> void:

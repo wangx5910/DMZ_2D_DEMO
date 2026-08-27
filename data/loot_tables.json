@@ -28,6 +28,13 @@
       "fill_chance": 0.92,
       "weights": { "green": 0, "blue": 0, "purple": 18, "gold": 56, "red": 26 },
       "cats": ["metal", "tech", "luxury", "bio", "intel", "illicit"]
+    },
+    "hostage": {
+      "label": "人质房物资箱",
+      "slots": [4, 6],
+      "fill_chance": 0.88,
+      "weights": { "green": 0, "blue": 0, "purple": 62, "gold": 28, "red": 10 },
+      "cats": ["metal", "tech", "luxury", "bio", "intel", "illicit"]
     }
   }
 }
