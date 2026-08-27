@@ -1,0 +1,532 @@
+{
+  "_note": "布局按 4km 坐标系撰写，运行时等比缩到 2km×2km。比例尺：1 米 = 8 像素，1 格 = 5 米 = 40 像素 → 运行时 400×400 格。分区依据 局内/设计/海湾城局内设计.md 六区身份表。rect 单位为格（作者坐标 0-800）。13 个放大 POI，彼此保底约 80m（作者坐标 ≥32 格）空地。",
+  "world": {
+    "size_m": 4000,
+    "px_per_m": 8,
+    "cell_px": 40,
+    "cell_m": 5
+  },
+  "districts": {
+    "chinatown": {
+      "name": "唐人街",
+      "ref": "牛车水 Chinatown",
+      "tier": 1,
+      "rect": [
+        0,
+        480,
+        320,
+        320
+      ],
+      "color": "#8c4a3a",
+      "terrain": "dense_alley",
+      "desc": "高密度低矮巷弄，屋顶连片。上手区，出生点池所在",
+      "loot_bias": [
+        "luxury",
+        "util",
+        "illicit"
+      ],
+      "is_spawn_zone": true
+    },
+    "industrial": {
+      "name": "工业区",
+      "ref": "裕廊 Jurong",
+      "tier": 2,
+      "rect": [
+        0,
+        130,
+        330,
+        350
+      ],
+      "color": "#6b6250",
+      "terrain": "pipe_maze",
+      "desc": "迷宫厂区，管道与储罐。确定性 PvP POI 首选地",
+      "loot_bias": [
+        "bio",
+        "tech",
+        "util"
+      ]
+    },
+    "port": {
+      "name": "港口",
+      "ref": "PSA / 大士港",
+      "tier": 3,
+      "rect": [
+        470,
+        0,
+        330,
+        300
+      ],
+      "color": "#3d5f6b",
+      "terrain": "container_yard",
+      "desc": "集装箱堆场 + 船坞栈桥。可动态遮断视野的掩体海",
+      "loot_bias": [
+        "illicit",
+        "bio",
+        "metal"
+      ]
+    },
+    "cbd": {
+      "name": "海湾中心 CBD",
+      "ref": "滨海湾 Marina Bay",
+      "tier": 3,
+      "rect": [
+        300,
+        260,
+        300,
+        300
+      ],
+      "color": "#4a4470",
+      "terrain": "neon_canyon",
+      "desc": "垂直霓虹峡谷，宽街 + 高塔。公共撤离热点",
+      "loot_bias": [
+        "tech",
+        "luxury",
+        "metal"
+      ]
+    },
+    "military": {
+      "name": "军事基地",
+      "ref": "樟宜 / 登加基地",
+      "tier": 4,
+      "rect": [
+        420,
+        540,
+        280,
+        260
+      ],
+      "color": "#4a5a3a",
+      "terrain": "airfield",
+      "desc": "开阔跑道 + 掩体群。重装 AI，谁先看见谁赢",
+      "loot_bias": [
+        "util",
+        "metal",
+        "intel"
+      ]
+    },
+    "corp_hq": {
+      "name": "企业总部",
+      "ref": "虚构旗舰义体公司",
+      "tier": 4,
+      "rect": [
+        640,
+        300,
+        160,
+        220
+      ],
+      "color": "#6b3a5a",
+      "terrain": "megastructure",
+      "desc": "单一巨构，门禁层层。最高戒备，义体蓝图（绑定）",
+      "loot_bias": [
+        "bio",
+        "intel",
+        "tech"
+      ]
+    },
+    "north_slum": {
+      "name": "北岸贫民窟",
+      "ref": "加冷河沿岸",
+      "tier": 2,
+      "rect": [
+        140,
+        0,
+        320,
+        140
+      ],
+      "color": "#7a6348",
+      "terrain": "shanty",
+      "desc": "违建叠楼 + 积水街区。杂货与黑市小点密布",
+      "loot_bias": [
+        "util",
+        "illicit",
+        "luxury"
+      ]
+    },
+    "flooded_south": {
+      "name": "南岸淹没区",
+      "ref": "东海岸公园",
+      "tier": 2,
+      "rect": [
+        120,
+        640,
+        300,
+        160
+      ],
+      "color": "#3a5560",
+      "terrain": "flooded",
+      "desc": "季风暴雨后的积水街区，移动受阻，天然屏障",
+      "loot_bias": [
+        "metal",
+        "util"
+      ]
+    }
+  },
+  "pois": [
+    {
+      "id": "marina_dome",
+      "name": "金沙穹顶",
+      "district": "cbd",
+      "type": "open",
+      "cell": [312, 312],
+      "size": [100, 72],
+      "l4": 2,
+      "desc": "顶级贵重品/算力卡"
+    },
+    {
+      "id": "corp_gate",
+      "name": "企业门户对冲区",
+      "district": "cbd",
+      "type": "pvp",
+      "cell": [448, 308],
+      "size": [72, 72],
+      "l4": 1,
+      "desc": "对称攻防，攻破解锁 labs"
+    },
+    {
+      "id": "cryo_vault",
+      "name": "纳米基质冷库",
+      "district": "port",
+      "type": "open",
+      "cell": [500, 40],
+      "size": [96, 70],
+      "l4": 2,
+      "desc": "纳米基质（T3 核心料）"
+    },
+    {
+      "id": "changi_armory",
+      "name": "樟宜军械库",
+      "district": "military",
+      "type": "open",
+      "cell": [448, 580],
+      "size": [96, 72],
+      "l4": 2,
+      "desc": "T3 武器/稀有改装件"
+    },
+    {
+      "id": "cyber_labs",
+      "name": "义体研发塔",
+      "district": "corp_hq",
+      "type": "pvp",
+      "cell": [655, 320],
+      "size": [90, 96],
+      "l4": 3,
+      "desc": "义体蓝图（绑定）· 最高戒备"
+    },
+    {
+      "id": "jurong_chem",
+      "name": "裕廊化工厂",
+      "district": "industrial",
+      "type": "open",
+      "cell": [16, 150],
+      "size": [96, 76],
+      "l4": 1,
+      "desc": "制作材料/机芯"
+    },
+    {
+      "id": "jurong_arena",
+      "name": "裕廊岛对冲场",
+      "district": "industrial",
+      "type": "pvp",
+      "cell": [170, 350],
+      "size": [72, 64],
+      "l4": 1,
+      "desc": "对称双入口，中价值军械箱"
+    },
+    {
+      "id": "kreta_market",
+      "name": "牛车水夜市",
+      "district": "chinatown",
+      "type": "open",
+      "cell": [16, 496],
+      "size": [96, 72],
+      "l4": 0,
+      "desc": "民用贵重/杂货（上手区）"
+    },
+    {
+      "id": "smith_alley",
+      "name": "史密斯街绞肉巷",
+      "district": "chinatown",
+      "type": "pvp",
+      "cell": [200, 608],
+      "size": [64, 56],
+      "l4": 0,
+      "desc": "近战巷战擂台，新手 PvP 练手"
+    },
+    {
+      "id": "chinatown_temple",
+      "name": "天福宫废墟",
+      "district": "chinatown",
+      "type": "open",
+      "cell": [152, 500],
+      "size": [76, 60],
+      "l4": 0,
+      "desc": "低阶杂货，出生点附近"
+    },
+    {
+      "id": "chinatown_carpark",
+      "name": "多层停车场",
+      "district": "chinatown",
+      "type": "open",
+      "cell": [16, 696],
+      "size": [68, 56],
+      "l4": 1,
+      "desc": "开阔层 + 楼梯井"
+    },
+    {
+      "id": "kallang_shanty",
+      "name": "加冷违建群",
+      "district": "north_slum",
+      "type": "open",
+      "cell": [170, 16],
+      "size": [88, 64],
+      "l4": 1,
+      "desc": "杂货与黑市小点"
+    },
+    {
+      "id": "flooded_mall",
+      "name": "淹没商场",
+      "district": "flooded_south",
+      "type": "open",
+      "cell": [312, 668],
+      "size": [96, 72],
+      "l4": 1,
+      "desc": "积水中的废弃商场"
+    }
+  ],
+  "arterials": {
+    "_note": "高架快速路 / 河道 —— 分区软边界，本身是开阔危险带。cells 为折线控制点（格坐标），width 单位格。",
+    "roads": [
+      {
+        "id": "expressway_ns",
+        "name": "南北高架",
+        "width": 5,
+        "points": [
+          [
+            400,
+            0
+          ],
+          [
+            400,
+            250
+          ],
+          [
+            380,
+            420
+          ],
+          [
+            400,
+            560
+          ],
+          [
+            390,
+            800
+          ]
+        ]
+      },
+      {
+        "id": "expressway_ew",
+        "name": "东西高架",
+        "width": 5,
+        "points": [
+          [
+            0,
+            300
+          ],
+          [
+            180,
+            290
+          ],
+          [
+            330,
+            300
+          ],
+          [
+            560,
+            280
+          ],
+          [
+            800,
+            290
+          ]
+        ]
+      },
+      {
+        "id": "ring_road",
+        "name": "环湾路",
+        "width": 4,
+        "points": [
+          [
+            300,
+            250
+          ],
+          [
+            600,
+            250
+          ],
+          [
+            620,
+            540
+          ],
+          [
+            300,
+            560
+          ],
+          [
+            300,
+            250
+          ]
+        ]
+      }
+    ],
+    "rivers": [
+      {
+        "id": "kallang_river",
+        "name": "加冷河",
+        "width": 7,
+        "points": [
+          [
+            140,
+            0
+          ],
+          [
+            160,
+            90
+          ],
+          [
+            200,
+            180
+          ],
+          [
+            260,
+            250
+          ],
+          [
+            300,
+            300
+          ]
+        ]
+      },
+      {
+        "id": "south_channel",
+        "name": "南岸水道",
+        "width": 9,
+        "points": [
+          [
+            0,
+            720
+          ],
+          [
+            160,
+            740
+          ],
+          [
+            340,
+            760
+          ],
+          [
+            520,
+            780
+          ],
+          [
+            800,
+            770
+          ]
+        ]
+      }
+    ]
+  },
+  "landmarks": {
+    "_note": "地标锚点——玩家靠它在大图上定位。本版仅作视觉标记，不参与碰撞。",
+    "items": [
+      {
+        "name": "全息塔",
+        "cell": [
+          430,
+          300
+        ],
+        "kind": "holo_tower",
+        "height": 3
+      },
+      {
+        "name": "广告牌残骸",
+        "cell": [
+          250,
+          420
+        ],
+        "kind": "billboard",
+        "height": 2
+      },
+      {
+        "name": "起重机群",
+        "cell": [
+          600,
+          90
+        ],
+        "kind": "crane",
+        "height": 3
+      },
+      {
+        "name": "冷却塔",
+        "cell": [
+          110,
+          260
+        ],
+        "kind": "cooling",
+        "height": 3
+      },
+      {
+        "name": "牌坊",
+        "cell": [
+          120,
+          540
+        ],
+        "kind": "gate_arch",
+        "height": 1
+      },
+      {
+        "name": "雷达罩",
+        "cell": [
+          520,
+          660
+        ],
+        "kind": "radar",
+        "height": 2
+      },
+      {
+        "name": "企业尖塔",
+        "cell": [
+          710,
+          380
+        ],
+        "kind": "corp_spire",
+        "height": 4
+      },
+      {
+        "name": "废弃地铁口",
+        "cell": [
+          300,
+          380
+        ],
+        "kind": "metro",
+        "height": 0
+      },
+      {
+        "name": "废弃地铁口",
+        "cell": [
+          470,
+          520
+        ],
+        "kind": "metro",
+        "height": 0
+      },
+      {
+        "name": "废弃地铁口",
+        "cell": [
+          200,
+          250
+        ],
+        "kind": "metro",
+        "height": 0
+      }
+    ]
+  }
+}

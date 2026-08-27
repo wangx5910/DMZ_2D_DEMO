@@ -1,0 +1,40 @@
+# Godot 4 generated
+.godot/
+.import/
+export.cfg
+*.translation
+
+# Exports / builds
+build/
+exports/
+*.apk
+*.aab
+*.ipa
+*.exe
+*.pck
+*.zip
+
+# Local tuning / secrets
+user://
+*.env
+.env*
+tuning_override.json
+
+# Logs and local run leftovers
+*.log
+crash_stdout.txt
+ship_*.txt
+ship_*.log
+reg_*.log
+flow_result.log
+compile.log
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+.cursor/

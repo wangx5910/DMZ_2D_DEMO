@@ -1,0 +1,33 @@
+{
+  "_note": "容器掉落表。richness = L1民用/L2标准/L3高保/L4免保。weights = 稀有度权重（真随机摇），slots = 容器格数范围[min,max]，cats = 允许品类池。结构对齐 局内/设计/item-system.md §4。",
+  "containers": {
+    "L1": {
+      "label": "抽屉 / 杂物箱",
+      "slots": [2, 4],
+      "fill_chance": 0.55,
+      "weights": { "green": 82, "blue": 16, "purple": 2, "gold": 0, "red": 0 },
+      "cats": ["metal", "tech", "bio", "intel", "illicit", "util"]
+    },
+    "L2": {
+      "label": "武器箱 / 零件箱",
+      "slots": [3, 5],
+      "fill_chance": 0.62,
+      "weights": { "green": 56, "blue": 33, "purple": 9, "gold": 2, "red": 0 },
+      "cats": ["metal", "tech", "bio", "intel", "illicit", "util"]
+    },
+    "L3": {
+      "label": "资源点保险箱 / 服务器",
+      "slots": [4, 6],
+      "fill_chance": 0.70,
+      "weights": { "green": 28, "blue": 40, "purple": 24, "gold": 7, "red": 1 },
+      "cats": ["metal", "tech", "bio", "intel", "illicit"]
+    },
+    "L4": {
+      "label": "顶级保险柜（需破解）",
+      "slots": [8, 11],
+      "fill_chance": 0.92,
+      "weights": { "green": 0, "blue": 0, "purple": 18, "gold": 56, "red": 26 },
+      "cats": ["metal", "tech", "luxury", "bio", "intel", "illicit"]
+    }
+  }
+}

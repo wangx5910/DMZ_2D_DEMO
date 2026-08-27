@@ -1,0 +1,52 @@
+{
+  "_note": "海湾城 2D Demo 物品定义。字段: name/cat/rarity/value/w/h。rarity: green|blue|purple|gold|red。cat 对应六大类 + 功能物资。w/h 为 Tetris 网格占位。数据取自 局内/设计/item-system.md §3，格子尺寸为 2D Demo 新增（小皮设定，待确认）。",
+  "items": {
+    "cash_bundle":     { "name": "灾前钞捆",     "cat": "metal",  "rarity": "green",  "value": 35,  "w": 1, "h": 1 },
+    "silver_bar":      { "name": "银条",         "cat": "metal",  "rarity": "blue",   "value": 150, "w": 2, "h": 1 },
+    "platinum_grain":  { "name": "铂金粒",       "cat": "metal",  "rarity": "purple", "value": 280, "w": 1, "h": 1 },
+    "palladium_ingot": { "name": "钯锭",         "cat": "metal",  "rarity": "gold",   "value": 500, "w": 2, "h": 1 },
+    "gold_bar":        { "name": "金条",         "cat": "metal",  "rarity": "red",    "value": 900, "w": 2, "h": 1 },
+
+    "used_mainboard":  { "name": "二手主板",     "cat": "tech",   "rarity": "green",  "value": 40,  "w": 2, "h": 2 },
+    "signal_emitter":  { "name": "信号发射器",   "cat": "tech",   "rarity": "blue",   "value": 130, "w": 2, "h": 1 },
+    "gpu_card":        { "name": "图形加速卡",   "cat": "tech",   "rarity": "purple", "value": 260, "w": 2, "h": 1 },
+    "quantum_storage": { "name": "量子存储模块", "cat": "tech",   "rarity": "gold",   "value": 460, "w": 1, "h": 2 },
+    "compute_core":    { "name": "顶级算力核心", "cat": "tech",   "rarity": "red",    "value": 820, "w": 2, "h": 2 },
+
+    "designer_toy":    { "name": "限量潮玩",     "cat": "luxury", "rarity": "green",  "value": 55,  "w": 1, "h": 2 },
+    "fine_liquor":     { "name": "名酒",         "cat": "luxury", "rarity": "blue",   "value": 150, "w": 1, "h": 2 },
+    "luxury_watch":    { "name": "名表",         "cat": "luxury", "rarity": "purple", "value": 300, "w": 1, "h": 1 },
+    "jewelry":         { "name": "珠宝",         "cat": "luxury", "rarity": "gold",   "value": 520, "w": 1, "h": 1 },
+    "masterpiece":     { "name": "名画真迹",     "cat": "luxury", "rarity": "red",    "value": 980, "w": 3, "h": 2 },
+
+    "spare_parts":     { "name": "义体零件",     "cat": "bio",    "rarity": "green",  "value": 30,  "w": 1, "h": 1 },
+    "precision_core":  { "name": "精密机芯",     "cat": "bio",    "rarity": "blue",   "value": 120, "w": 1, "h": 1 },
+    "nano_matrix":     { "name": "军规纳米基质", "cat": "bio",    "rarity": "purple", "value": 240, "w": 1, "h": 2 },
+    "neural_link":     { "name": "神经接口",     "cat": "bio",    "rarity": "gold",   "value": 440, "w": 1, "h": 1 },
+    "cyber_core":      { "name": "义体核心",     "cat": "bio",    "rarity": "red",    "value": 760, "w": 2, "h": 2 },
+
+    "cctv_tape":       { "name": "监控录像",     "cat": "intel",  "rarity": "green",  "value": 45,  "w": 1, "h": 1 },
+    "trade_records":   { "name": "交易记录",     "cat": "intel",  "rarity": "blue",   "value": 140, "w": 1, "h": 1 },
+    "encrypted_disk":  { "name": "加密数据盘",   "cat": "intel",  "rarity": "purple", "value": 260, "w": 1, "h": 1 },
+    "blacklist_chip":  { "name": "黑名单芯片",   "cat": "intel",  "rarity": "gold",   "value": 440, "w": 1, "h": 1 },
+    "corp_secrets":    { "name": "企业机密",     "cat": "intel",  "rarity": "red",    "value": 800, "w": 2, "h": 1 },
+
+    "fake_id":         { "name": "假证件",       "cat": "illicit","rarity": "green",  "value": 50,  "w": 1, "h": 1 },
+    "drug_pack":       { "name": "毒品包",       "cat": "illicit","rarity": "blue",   "value": 160, "w": 1, "h": 1 },
+    "combat_stim":     { "name": "战术违禁药剂", "cat": "illicit","rarity": "purple", "value": 250, "w": 1, "h": 2 },
+    "illegal_implant": { "name": "违禁义体",     "cat": "illicit","rarity": "gold",   "value": 450, "w": 2, "h": 2 },
+    "smuggled_arms":   { "name": "走私军火部件", "cat": "illicit","rarity": "red",    "value": 780, "w": 3, "h": 1 },
+
+    "ammo_box":        { "name": "弹药盒",       "cat": "util",   "rarity": "green",  "value": 25,  "w": 2, "h": 1 },
+    "medkit":          { "name": "医疗包",       "cat": "util",   "rarity": "blue",   "value": 90,  "w": 2, "h": 2 },
+    "weapon_mod":      { "name": "武器改装件",   "cat": "util",   "rarity": "purple", "value": 180, "w": 2, "h": 1 },
+    "keycard":         { "name": "钥匙卡",       "cat": "util",   "rarity": "gold",   "value": 300, "w": 1, "h": 1 }
+  },
+  "rarity_colors": {
+    "green":  "#4caf50",
+    "blue":   "#3f8cff",
+    "purple": "#a259e6",
+    "gold":   "#e8a33d",
+    "red":    "#e5484d"
+  }
+}

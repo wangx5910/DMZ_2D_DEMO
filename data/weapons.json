@@ -1,0 +1,71 @@
+{
+  "_note": "枪械定义。本版只做 M4，配件系统不做。数值单位：damage=点，rpm=发/分钟，spread=度，reload=秒。玩家/AI玩家共用 m4：100HP、12伤、780RPM → 9发打死，理论TTK=(9-1)×60/780≈0.62s（目标0.6s）。",
+  "weapons": {
+    "m4": {
+      "name": "M4 卡宾枪",
+      "caliber": "5.56",
+      "fire_modes": [
+        "auto",
+        "single"
+      ],
+      "rpm": 780,
+      "damage": 12,
+      "mag_size": 30,
+      "reload_time": 2.4,
+      "reload_time_tactical": 2.0,
+      "spread_base": 0.6,
+      "spread_per_shot": 0.9,
+      "spread_max": 7.5,
+      "spread_recover": 6.0,
+      "recoil_kick": 2.2,
+      "range": 900,
+      "falloff_start": 420,
+      "falloff_min_mul": 0.55,
+      "ads_time": 0.22,
+      "ads_spread_mul": 0.35,
+      "ads_move_mul": 0.45,
+      "sprint_spread_mul": 3.2,
+      "crouch_spread_mul": 0.7,
+      "bullet_speed": 2600,
+      "pellets": 1
+    },
+    "grunt_rifle": {
+      "name": "小兵步枪",
+      "caliber": "5.56",
+      "fire_modes": [
+        "auto"
+      ],
+      "rpm": 440,
+      "damage": 24,
+      "mag_size": 30,
+      "reload_time": 3.2,
+      "reload_time_tactical": 2.8,
+      "spread_base": 3.9,
+      "spread_per_shot": 2.34,
+      "spread_max": 13.0,
+      "spread_recover": 4.0,
+      "recoil_kick": 1.6,
+      "range": 700,
+      "falloff_start": 300,
+      "falloff_min_mul": 0.5,
+      "ads_time": 0.35,
+      "ads_spread_mul": 0.55,
+      "ads_move_mul": 0.6,
+      "sprint_spread_mul": 3.0,
+      "crouch_spread_mul": 0.8,
+      "bullet_speed": 2200,
+      "pellets": 1,
+      "burst_min": 2,
+      "burst_max": 4,
+      "burst_pause_min": 0.6,
+      "burst_pause_max": 1.4
+    }
+  },
+  "ammo": {
+    "5.56": {
+      "name": "5.56mm 弹药",
+      "reserve_default": 120,
+      "reserve_max": 300
+    }
+  }
+}
