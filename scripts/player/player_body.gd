@@ -38,6 +38,11 @@ func _draw() -> void:
 	# 身体（画在枪之后 → 盖住枪托，视觉上枪是"端在身前"）
 	draw_circle(Vector2.ZERO, r + 1.5, Color(0.05, 0.06, 0.09, 0.9))
 	draw_circle(Vector2.ZERO, r, _stance_color)
+	if bool(p.get("contract_expose")):
+		var pulse: float = 0.55 + 0.45 * sin(Time.get_ticks_msec() * 0.012)
+		draw_arc(Vector2.ZERO, r + 6.0 + pulse * 4.0, 0, TAU, 28,
+			Color(0.35, 0.95, 1.0, 0.85), 2.2)
+		draw_circle(Vector2.ZERO, r + 3.0, Color(0.30, 0.85, 1.0, 0.18))
 	var tag := str(p.get("net_tag")) if p.get("net_tag") != null else ""
 	var pid = p.get("peer_id")
 	if tag != "" and (NetHub.is_online() or (pid != null and int(pid) != 1)):

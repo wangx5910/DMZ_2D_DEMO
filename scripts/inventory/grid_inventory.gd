@@ -144,6 +144,12 @@ func total_value() -> int:
 		v += int(item_def(e["id"]).get("value", 0))
 	return v
 
+func has_id(id: String) -> bool:
+	for e in entries:
+		if str(e.get("id", "")) == id:
+			return true
+	return false
+
 ## 扁平物品 id 列表（用于死亡掉落尸体包）
 func item_ids() -> Array:
 	var out: Array = []

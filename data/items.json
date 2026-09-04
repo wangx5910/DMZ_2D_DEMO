@@ -29,6 +29,7 @@
     "trade_records":   { "name": "交易记录",     "cat": "intel",  "rarity": "blue",   "value": 140, "w": 1, "h": 1 },
     "encrypted_disk":  { "name": "加密数据盘",   "cat": "intel",  "rarity": "purple", "value": 260, "w": 1, "h": 1 },
     "blacklist_chip":  { "name": "黑名单芯片",   "cat": "intel",  "rarity": "gold",   "value": 440, "w": 1, "h": 1 },
+    "corp_id_chip":    { "name": "公司证件芯片", "cat": "intel",  "rarity": "gold",   "value": 480, "w": 1, "h": 1 },
     "corp_secrets":    { "name": "企业机密",     "cat": "intel",  "rarity": "red",    "value": 800, "w": 2, "h": 1 },
 
     "fake_id":         { "name": "假证件",       "cat": "illicit","rarity": "green",  "value": 50,  "w": 1, "h": 1 },

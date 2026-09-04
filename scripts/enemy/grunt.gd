@@ -72,6 +72,7 @@ var _progress_timer := 0.0            ## 进展采样窗口计时
 var _last_goal_dist := -1.0           ## 上一次采样时到目标的距离
 var _clear_streak := 0.0              ## 直线通畅持续多久才退出沿墙（防贴墙闪）
 var _perceive_hold := 0               ## 连续不可见才隐藏，避免贴墙闪烁
+var contract_mark := false
 
 const PROBE_LEN := 52.0               ## 绕行探测射线长度（略大于体型+余量）
 const PROBE_ANGLES := [30.0, 55.0, 80.0, 105.0, 130.0, 155.0]
@@ -467,6 +468,15 @@ func hear_gunshot(pos: Vector2) -> void:
 	_investigate_pos = pos
 	_set_state(State.INVESTIGATE)
 
+func mark_for_contract() -> void:
+	contract_mark = true
+	add_to_group("contract_marks")
+	if health != null:
+		health.reset(health.hp_max * 1.55)
+	if inv != null:
+		inv.grant_no_weight("corp_id_chip")
+	queue_redraw()
+
 func _on_died(from: Vector2) -> void:
 	_set_state(State.DEAD)
 	velocity = Vector2.ZERO
@@ -477,6 +487,10 @@ func _on_died(from: Vector2) -> void:
 	RaidLog.bump("enemies_killed")
 	RaidLog.log_event("enemy_killed", {"pos": [int(global_position.x), int(global_position.y)]})
 	died.emit(global_position)
+	if contract_mark:
+		var dir = get_tree().get_first_node_in_group("contract_director")
+		if dir != null and dir.has_method("on_mark_killed"):
+			dir.on_mark_killed(self)
 	queue_redraw()
 	# 留一具尸体作为"这里打过架"的信息（照搜打撤：尸体是情报）
 	set_physics_process(false)
@@ -769,6 +783,10 @@ func _draw() -> void:
 	var body_col := _state_color()
 	draw_circle(Vector2.ZERO, r + 1.5, Color(0.05, 0.04, 0.04, 0.9))
 	draw_circle(Vector2.ZERO, r, body_col)
+	if contract_mark:
+		draw_arc(Vector2.ZERO, r + 5.0, 0, TAU, 22, Color(1.0, 0.82, 0.28, 0.95), 2.2)
+		draw_string(ThemeDB.fallback_font, Vector2(-22, -r - 16), "清洗目标",
+			HORIZONTAL_ALIGNMENT_CENTER, 44, 11, Color(1.0, 0.85, 0.35))
 	# 朝向缺口
 	draw_colored_polygon(
 		PackedVector2Array([Vector2(r + 7, 0), Vector2(r * 0.3, -4), Vector2(r * 0.3, 4)]),

@@ -1,8 +1,9 @@
 extends Node
-## NetHub · 局域网联机（ENet）
+## NetHub · 局域网 / Tailscale 联机（ENet）
 ##
 ## 房主权威：世界 seed、AI、伤害结算。各端只操控自己的角色。
 ## 单机 mode=SOLO，行为与接入前一致。
+## 跨网：两边装 Tailscale 并登录同一 tailnet，用 100.x 地址互连。
 
 enum Mode { SOLO, HOST, CLIENT }
 
@@ -11,6 +12,7 @@ signal peer_left(id: int)
 signal mode_changed(mode: Mode)
 signal session_ready()
 signal hosts_updated(hosts: Array)
+signal tailscale_updated(peers: Array)
 signal net_message(text: String)
 signal shot_fx(from: Vector2, to: Vector2, speed: float)
 signal ai_snapshot(blob: PackedByteArray)
@@ -42,6 +44,10 @@ var _state_t := 0.0
 var _ai_t := 0.0
 var _announce_t := 0.0
 var _signals_bound := false
+var ts_peers: Array = []          ## [{ip, name, online, dns}]
+var _ts_refresh_t := 4.5
+var _ts_exe := ""
+var _ts_exe_checked := false
 
 func is_online() -> bool:
 	return mode != Mode.SOLO
@@ -109,21 +115,164 @@ func connected_peer_ids() -> PackedInt32Array:
 
 func local_ips() -> PackedStringArray:
 	var out: PackedStringArray = []
-	for a in IP.get_local_addresses():
-		var s := str(a)
-		if s.begins_with("127.") or s.contains(":"):
-			continue
-		if s.begins_with("169.254."):
-			continue
-		out.append(s)
+	for e in lan_addresses():
+		out.append(str(e.get("ip", "")))
 	return out
 
 func primary_ip() -> String:
-	var ips := local_ips()
-	for s in ips:
-		if s.begins_with("192.168.") or s.begins_with("10.") or s.begins_with("172."):
-			return s
-	return ips[0] if ips.size() > 0 else "127.0.0.1"
+	var list: Array = lan_addresses()
+	if list.is_empty():
+		return "127.0.0.1"
+	return str(list[0].get("ip", "127.0.0.1"))
+
+func has_tailscale() -> bool:
+	for e in lan_addresses():
+		if bool(e.get("tailscale", false)):
+			return true
+	return false
+
+func tailscale_ip() -> String:
+	for e in lan_addresses():
+		if bool(e.get("tailscale", false)):
+			return str(e.get("ip", ""))
+	return ""
+
+## 本机可展示的 IPv4，按「更可能让同伴连上」排序。
+## Tailscale（100.x）优先：公司有线 / ACL 拦局域网时，这是能跨网互连的地址。
+## 虚拟网卡（VMware / Cisco AnyConnect / 蓝牙）排到后面。
+func lan_addresses() -> Array:
+	var rows: Array = []
+	var seen := {}
+	var ifaces: Array = IP.get_local_interfaces()
+	if not ifaces.is_empty():
+		for it in ifaces:
+			var nam: String = str(it.get("friendly", ""))
+			if nam == "":
+				nam = str(it.get("name", ""))
+			var addrs: Array = it.get("addresses", [])
+			for a in addrs:
+				_maybe_add_lan_ip(rows, seen, str(a), nam)
+	else:
+		for a in IP.get_local_addresses():
+			_maybe_add_lan_ip(rows, seen, str(a), "")
+	rows.sort_custom(func(a, b):
+		return int(a.get("score", 0)) > int(b.get("score", 0)))
+	return rows
+
+func format_lan_ips(multiline: bool = true) -> String:
+	var list: Array = lan_addresses()
+	if list.is_empty():
+		return "本机没有可用 IPv4"
+	if not multiline:
+		var bits: PackedStringArray = []
+		for e in list:
+			bits.append(str(e.get("ip", "")))
+		return " / ".join(bits)
+	var lines: PackedStringArray = []
+	if has_tailscale():
+		lines.append("Tailscale 已接通  把这个发给同伴  %s" % tailscale_ip())
+	else:
+		lines.append("未检测到 Tailscale。公司网连不上时：两边都装 Tailscale，登录同一账号/网络，再用 100.x 互连。")
+		lines.append("推荐发给同伴  %s" % str(list[0].get("ip", "")))
+	var rec: String = str(list[0].get("ip", ""))
+	for e in list:
+		var ip: String = str(e.get("ip", ""))
+		var nam: String = str(e.get("name", ""))
+		var tag := ""
+		if bool(e.get("tailscale", false)):
+			tag = "  ← Tailscale，跨网用这个"
+		elif bool(e.get("virtual", false)):
+			tag = "  虚拟网卡，对方常连不上"
+		elif ip == rec:
+			tag = "  ← 用这个"
+		var iface := nam if nam != "" else "网卡"
+		lines.append("  %s  %s%s" % [iface, ip, tag])
+	return "\n".join(lines)
+
+func _maybe_add_lan_ip(rows: Array, seen: Dictionary, ip: String, iface_name: String) -> void:
+	if ip == "" or seen.has(ip):
+		return
+	if ip.begins_with("127.") or ip.contains(":"):
+		return
+	if ip.begins_with("169.254."):
+		return
+	seen[ip] = true
+	var ts: bool = _is_tailscale_ip(ip) or _iface_looks_tailscale(iface_name)
+	var virt: bool = (not ts) and _iface_looks_virtual(iface_name)
+	var score := 50
+	if ts:
+		score += 100
+	elif virt:
+		score -= 70
+	elif _iface_looks_physical(iface_name):
+		score += 40
+	if _is_rfc1918(ip):
+		score += 12
+	# 这类网段常见于虚拟机 / ICS / 部分 VPN，家用路由很少用
+	if ip.begins_with("192.168.56.") or ip.begins_with("192.168.137.") \
+			or ip.begins_with("192.168.192.") or ip.begins_with("192.168.255."):
+		score -= 25
+	# 公司内网常见 30.x，对端不在同一 ACL 时连不上
+	if ip.begins_with("30."):
+		score -= 15
+	rows.append({
+		"ip": ip, "name": iface_name, "virtual": virt,
+		"tailscale": ts, "score": score,
+	})
+
+func _is_rfc1918(ip: String) -> bool:
+	if ip.begins_with("10.") or ip.begins_with("192.168."):
+		return true
+	if ip.begins_with("172."):
+		var parts: PackedStringArray = ip.split(".")
+		if parts.size() >= 2:
+			var n: int = int(parts[1])
+			return n >= 16 and n <= 31
+	return false
+
+func _is_tailscale_ip(ip: String) -> bool:
+	# Tailscale 用 CGNAT 100.64.0.0/10
+	if not ip.begins_with("100."):
+		return false
+	var parts: PackedStringArray = ip.split(".")
+	if parts.size() < 2:
+		return false
+	var n: int = int(parts[1])
+	return n >= 64 and n <= 127
+
+func _iface_looks_tailscale(nam: String) -> bool:
+	return nam.to_lower().contains("tailscale")
+
+func _looks_ipv4(s: String) -> bool:
+	var parts: PackedStringArray = s.split(".")
+	if parts.size() != 4:
+		return false
+	for x in parts:
+		if not x.is_valid_int():
+			return false
+		var n: int = int(x)
+		if n < 0 or n > 255:
+			return false
+	return true
+
+func _iface_looks_virtual(nam: String) -> bool:
+	var s := nam.to_lower()
+	if s.contains("tailscale"):
+		return false
+	for k in ["vmware", "vbox", "virtualbox", "virtual", "hyper-v", "vethernet",
+			"bluetooth", "loopback", "docker", "wsl", "hamachi", "zerotier",
+			"radmin", "vpn", "anyconnect", "tap-windows", "npcap", "teredo",
+			"isatap", "pseudo", "vnic", "tun", "ngnclient"]:
+		if s.contains(k):
+			return true
+	return false
+
+func _iface_looks_physical(nam: String) -> bool:
+	var s := nam.to_lower()
+	for k in ["ethernet", "以太网", "wi-fi", "wifi", "wlan", "无线", "gigabit", "intel"]:
+		if s.contains(k):
+			return true
+	return false
 
 func player_count() -> int:
 	return maxi(1, player_nodes.size())
@@ -220,17 +369,38 @@ func host_lan(port: int = DEFAULT_PORT) -> Error:
 			world_seed = 1
 	_bind_mp_signals()
 	_start_discovery_reply()
+	refresh_tailscale()
 	mode_changed.emit(mode)
-	net_message.emit("已开房  %s:%d" % [primary_ip(), port])
+	var shown: String = tailscale_ip()
+	if shown == "":
+		shown = primary_ip()
+	if has_tailscale():
+		net_message.emit("已开房  Tailscale %s:%d  ← 把这个发给同伴" % [shown, port])
+	else:
+		net_message.emit("已开房  %s:%d（未检测到 Tailscale，跨网请先两边安装）" % [shown, port])
+	var extras: PackedStringArray = []
+	for e in lan_addresses():
+		var ip: String = str(e.get("ip", ""))
+		if ip != shown:
+			extras.append(ip)
+	if extras.size() > 0:
+		net_message.emit("本机还有其他地址：%s" % " / ".join(extras))
 	session_ready.emit()
 	return OK
 
 func join_lan(ip: String, port: int = DEFAULT_PORT) -> Error:
 	leave_lan()
-	join_ip = ip.strip_edges()
+	join_ip = ip.strip_edges().trim_suffix(".")
 	bind_port = port
 	if join_ip == "":
 		return ERR_INVALID_PARAMETER
+	if not _looks_ipv4(join_ip):
+		var resolved := IP.resolve_hostname(join_ip, IP.TYPE_IPV4)
+		if resolved != "":
+			join_ip = resolved
+		else:
+			net_message.emit("无法解析 %s（可用 Tailscale 的 100.x 或 MagicDNS 名）" % ip.strip_edges())
+			return ERR_CANT_RESOLVE
 	var peer := ENetMultiplayerPeer.new()
 	var err: Error = peer.create_client(join_ip, port)
 	if err != OK:
@@ -274,6 +444,54 @@ func ensure_seed() -> int:
 		if world_seed == 0:
 			world_seed = 1
 	return world_seed
+
+func request_depot_call(uid: int) -> void:
+	if not is_online():
+		return
+	_rpc_depot_call_ask.rpc_id(1, uid)
+
+func broadcast_depot_called(uid: int, appear_at: float) -> void:
+	if not is_online():
+		return
+	_rpc_depot_called.rpc(uid, appear_at)
+
+@rpc("any_peer", "reliable")
+func _rpc_depot_call_ask(uid: int) -> void:
+	if not is_authority():
+		return
+	var tree := get_tree()
+	if tree == null:
+		return
+	var w = tree.get_first_node_in_group("world_map")
+	if w == null:
+		w = tree.get_first_node_in_group("raid_root")
+		if w != null:
+			w = w.get("level")
+	if w == null or not w.has_method("find_depot"):
+		return
+	var d = w.find_depot(uid)
+	if d != null and d.has_method("start_call"):
+		d.start_call(null)
+
+@rpc("authority", "reliable")
+func _rpc_depot_called(uid: int, appear_at: float) -> void:
+	if is_authority():
+		return
+	var tree := get_tree()
+	if tree == null:
+		return
+	var w = tree.get_first_node_in_group("world_map")
+	if w == null:
+		var root = tree.get_first_node_in_group("raid_root")
+		if root != null:
+			w = root.get("level")
+	if w == null or not w.has_method("find_depot"):
+		return
+	var d = w.find_depot(uid)
+	if d != null and d.has_method("apply_call_state"):
+		d.apply_call_state(appear_at)
+		if w.has_method("on_depot_called"):
+			w.on_depot_called(d)
 
 # ── 信号 ────────────────────────────────────────────────
 func _bind_mp_signals() -> void:
@@ -548,6 +766,7 @@ func start_discovering() -> void:
 		_udp.set_broadcast_enabled(true)
 		_udp.bind(0)
 	_discover_t = 0.0
+	refresh_tailscale()
 	_broadcast_query()
 
 func stop_discovering() -> void:
@@ -576,6 +795,95 @@ func _broadcast_query() -> void:
 	var bytes := payload.to_utf8_buffer()
 	_udp.set_dest_address("255.255.255.255", DISCOVERY_PORT)
 	_udp.put_packet(bytes)
+	# Tailscale 不转发广播，向在线同伴单播搜房
+	var seen := {}
+	for p in ts_peers:
+		var ip: String = str(p.get("ip", ""))
+		if ip == "" or seen.has(ip):
+			continue
+		if not bool(p.get("online", true)):
+			continue
+		seen[ip] = true
+		_udp.set_dest_address(ip, DISCOVERY_PORT)
+		_udp.put_packet(bytes)
+
+func refresh_tailscale() -> void:
+	_refresh_tailscale_peers()
+	tailscale_updated.emit(ts_peers)
+
+func _tailscale_exe_path() -> String:
+	if _ts_exe_checked:
+		return _ts_exe
+	_ts_exe_checked = true
+	_ts_exe = ""
+	var cands: PackedStringArray = PackedStringArray()
+	var pf := OS.get_environment("ProgramFiles")
+	if pf != "":
+		cands.append(pf.path_join("Tailscale").path_join("tailscale.exe"))
+	cands.append("C:/Program Files/Tailscale/tailscale.exe")
+	var la := OS.get_environment("LOCALAPPDATA")
+	if la != "":
+		cands.append(la.path_join("Tailscale").path_join("tailscale.exe"))
+	for p in cands:
+		if p != "" and FileAccess.file_exists(p):
+			_ts_exe = p
+			return _ts_exe
+	return ""
+
+func _refresh_tailscale_peers() -> void:
+	var exe := _tailscale_exe_path()
+	if exe == "":
+		ts_peers.clear()
+		return
+	var out: Array = []
+	var code: int = OS.execute(exe, PackedStringArray(["status", "--json"]), out, true, false)
+	if code != 0 or out.is_empty():
+		ts_peers.clear()
+		return
+	var raw := "\n".join(PackedStringArray(out))
+	var data = JSON.parse_string(raw)
+	if not (data is Dictionary):
+		ts_peers.clear()
+		return
+	var self_ips := {}
+	var self_d = data.get("Self", {})
+	if self_d is Dictionary:
+		for sip in self_d.get("TailscaleIPs", []):
+			var sips := str(sip)
+			if _looks_ipv4(sips):
+				self_ips[sips] = true
+	var rows: Array = []
+	var peer_map = data.get("Peer", {})
+	if peer_map is Dictionary:
+		for k in peer_map:
+			_append_ts_peer(rows, self_ips, peer_map[k])
+	var peer_list = data.get("Peers", [])
+	if peer_list is Array:
+		for item in peer_list:
+			_append_ts_peer(rows, self_ips, item)
+	ts_peers = rows
+
+func _append_ts_peer(rows: Array, self_ips: Dictionary, item) -> void:
+	if not (item is Dictionary):
+		return
+	var online: bool = bool(item.get("Online", false)) or bool(item.get("Active", false))
+	var nam: String = str(item.get("HostName", ""))
+	if nam == "":
+		nam = str(item.get("DNSName", "")).trim_suffix(".")
+	var ipv4 := ""
+	for tip in item.get("TailscaleIPs", []):
+		var s := str(tip)
+		if _looks_ipv4(s) and _is_tailscale_ip(s) and not self_ips.has(s):
+			ipv4 = s
+			break
+	if ipv4 == "":
+		return
+	rows.append({
+		"ip": ipv4,
+		"name": nam if nam != "" else ipv4,
+		"online": online,
+		"dns": str(item.get("DNSName", "")).trim_suffix("."),
+	})
 
 func _process(delta: float) -> void:
 	_poll_udp()
@@ -591,6 +899,10 @@ func _process(delta: float) -> void:
 			_discover_t = 0.0
 			_broadcast_query()
 		_age_hosts(delta)
+		_ts_refresh_t += delta
+		if _ts_refresh_t >= 5.0:
+			_ts_refresh_t = 0.0
+			refresh_tailscale()
 	if not is_online():
 		return
 	_state_t += delta
@@ -634,14 +946,19 @@ func _on_udp_packet(pkt: PackedByteArray, ip: String, from_port: int, as_host: b
 			"port": bind_port,
 			"n": player_count(),
 			"name": host_name,
-			"ip": primary_ip(),
+			"ip": tailscale_ip() if has_tailscale() else primary_ip(),
 		})
 		if from_port > 0:
 			_udp_listen.set_dest_address(ip, from_port)
 			_udp_listen.put_packet(reply.to_utf8_buffer())
 		return
 	if t == "R":
-		_remember_host(ip if ip != "" else str(data.get("ip", "")),
+		var listed: String = str(data.get("ip", ""))
+		var use_ip: String = ip if ip != "" else listed
+		# 跨网时 UDP 源地址可能是公司网 IP；优先用房主自称的 Tailscale 地址
+		if _is_tailscale_ip(listed):
+			use_ip = listed
+		_remember_host(use_ip,
 			int(data.get("port", DEFAULT_PORT)),
 			str(data.get("name", "房间")), int(data.get("n", 1)))
 

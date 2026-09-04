@@ -1,18 +1,24 @@
 extends Area2D
-## Depot · 物资提交点。打开 8×5 网络存储箱：寄存 / 按倍率提交。
-## 任意寄存或提交后退出，本点消耗，地图置灰。未就绪时只显示倒计时。
+## Depot · 物资提交点。先交互呼叫，倒计时结束后才可提交。
+## 任意寄存或提交后退出，本点消耗，地图置灰。
+
+enum Phase { CALLABLE, CALLING, OPEN, CONSUMED }
 
 var mul: float = 1.0
 var wave: int = 0
-var ready_at: float = 0.0
+var depot_uid: int = 0
+var phase: int = Phase.CALLABLE
+var appear_at: float = 0.0
 var consumed: bool = false
 var _focused := false
 
-func setup(world_pos: Vector2, multiplier: float = 1.0, ready_time: float = 0.0, wave_i: int = 0) -> void:
+func setup(world_pos: Vector2, multiplier: float = 1.0, _ready_time: float = 0.0, wave_i: int = 0) -> void:
 	global_position = world_pos
 	mul = multiplier
-	ready_at = ready_time
 	wave = wave_i
+	phase = Phase.CALLABLE
+	consumed = false
+	appear_at = 0.0
 
 func _ready() -> void:
 	add_to_group("depots")
@@ -31,14 +37,30 @@ func raid_time() -> float:
 		return float(w.raid_time)
 	return 0.0
 
+func is_calling() -> bool:
+	return phase == Phase.CALLING and not consumed
+
+func is_callable() -> bool:
+	return phase == Phase.CALLABLE and not consumed
+
+func is_open() -> bool:
+	return phase == Phase.OPEN and not consumed
+
+## 兼容旧接口：可提交才算 ready
 func is_ready() -> bool:
-	return not consumed and raid_time() + 0.001 >= ready_at
+	return is_open()
 
 func ready_remain() -> float:
-	return maxf(0.0, ready_at - raid_time())
+	if phase != Phase.CALLING:
+		return 0.0
+	return maxf(0.0, appear_at - raid_time())
+
+func can_submit() -> bool:
+	return is_open()
 
 func consume() -> void:
 	consumed = true
+	phase = Phase.CONSUMED
 	queue_redraw()
 
 func accent_color() -> Color:
@@ -53,14 +75,23 @@ func accent_color() -> Color:
 func interact_prompt() -> String:
 	if consumed:
 		return "提交点已使用"
-	if not is_ready():
-		return "提交点冷却中（%s 后可用 · ×%.1f）" % [_fmt_remain(ready_remain()), mul]
-	return "[E] 物资提交点  ×%.1f" % mul
+	match phase:
+		Phase.CALLABLE:
+			return "[E] 呼叫提交点  ×%.1f（呼叫后 %.0f 秒出现）" % [mul, Tuning.depot_call_time]
+		Phase.CALLING:
+			return "提交点呼叫中（%s 后出现 · ×%.1f）" % [_fmt_remain(ready_remain()), mul]
+		Phase.OPEN:
+			return "[E] 物资提交点  ×%.1f" % mul
+	return "提交点已使用"
 
 func try_interact(who) -> bool:
 	if who == null or consumed:
 		return false
-	if not is_ready():
+	if phase == Phase.CALLABLE:
+		return _begin_call(who)
+	if phase == Phase.CALLING:
+		return false
+	if phase != Phase.OPEN:
 		return false
 	if who.get("searching_container") != null and who.has_method("abort_search"):
 		who.abort_search("deposit")
@@ -70,12 +101,49 @@ func try_interact(who) -> bool:
 		return true
 	return false
 
+func apply_call_state(at: float) -> void:
+	if consumed or phase == Phase.OPEN or phase == Phase.CONSUMED:
+		return
+	phase = Phase.CALLING
+	appear_at = at
+	queue_redraw()
+
+func _begin_call(who) -> bool:
+	if NetHub.is_online() and not NetHub.is_authority():
+		NetHub.request_depot_call(depot_uid)
+		return true
+	return start_call(who)
+
+func start_call(_who = null) -> bool:
+	if consumed or phase != Phase.CALLABLE:
+		return false
+	phase = Phase.CALLING
+	appear_at = raid_time() + Tuning.depot_call_time
+	queue_redraw()
+	var w = get_parent()
+	if w != null and w.has_method("on_depot_called"):
+		w.on_depot_called(self)
+	if NetHub.is_online() and NetHub.is_authority():
+		NetHub.broadcast_depot_called(depot_uid, appear_at)
+	return true
+
 func set_focused(on: bool) -> void:
 	_focused = on
 	queue_redraw()
 
 func _process(_delta: float) -> void:
-	if not consumed and not is_ready():
+	if consumed:
+		return
+	if phase == Phase.CALLING:
+		if raid_time() + 0.001 >= appear_at:
+			phase = Phase.OPEN
+			var w = get_parent()
+			if w != null and w.has_method("on_depot_opened"):
+				w.on_depot_opened(self)
+			queue_redraw()
+		else:
+			queue_redraw()
+	elif phase == Phase.CALLABLE:
 		queue_redraw()
 
 func _fmt_remain(sec: float) -> String:
@@ -84,8 +152,12 @@ func _fmt_remain(sec: float) -> String:
 
 func _draw() -> void:
 	var col := accent_color()
-	if not consumed and not is_ready():
-		col = col.darkened(0.45)
+	if consumed:
+		pass
+	elif phase == Phase.CALLING:
+		col = col.lightened(0.15)
+	elif phase == Phase.CALLABLE:
+		col = col.darkened(0.25)
 	var a: float = 0.14 if consumed else 0.22
 	draw_circle(Vector2.ZERO, 16.0, Color(col.r, col.g, col.b, a))
 	draw_arc(Vector2.ZERO, 16.0, 0, TAU, 24, col, 2.0 if consumed else 2.4)
@@ -94,9 +166,15 @@ func _draw() -> void:
 	var label := "提交点 ×%.1f" % mul
 	if consumed:
 		label = "提交点（已用）"
-	elif not is_ready():
-		label = "提交点 %s" % _fmt_remain(ready_remain())
+	elif phase == Phase.CALLABLE:
+		label = "呼叫点 ×%.1f" % mul
+	elif phase == Phase.CALLING:
+		label = "呼叫中 %s" % _fmt_remain(ready_remain())
 	draw_string(ThemeDB.fallback_font, Vector2(-48, -24), label,
 		HORIZONTAL_ALIGNMENT_CENTER, 96, 13, col)
 	if _focused and not consumed:
 		draw_arc(Vector2.ZERO, 22.0, 0, TAU, 28, Color(0.85, 0.95, 1.0), 1.6)
+	if phase == Phase.CALLING:
+		var pulse: float = 0.55 + 0.45 * sin(Time.get_ticks_msec() * 0.012)
+		draw_arc(Vector2.ZERO, 20.0 + pulse * 10.0, 0, TAU, 28,
+			Color(col.r, col.g, col.b, 0.55), 1.8)

@@ -183,6 +183,20 @@ func _draw_free_safes(c: Control, rect: Rect2, center: Vector2, scale: float) ->
 			c.draw_arc(mp, r, 0, TAU, 10, col * Color(1, 1, 1, 0.6), 1.2)
 		else:
 			c.draw_circle(mp, r, col)
+	for n2 in get_tree().get_nodes_in_group("contract_reward"):
+		if not is_instance_valid(n2):
+			continue
+		if n2.has_method("is_fully_searched") and n2.is_fully_searched():
+			continue
+		var rp := _w2m(n2.global_position, rect, center, scale)
+		if not rect.has_point(rp):
+			continue
+		var rcol := Color(1.0, 0.78, 0.22)
+		c.draw_circle(rp, 5.4, rcol)
+		c.draw_arc(rp, 8.0, 0, TAU, 12, rcol, 1.5)
+		if full_screen:
+			c.draw_string(_font, rp + Vector2(7, -4), "合约奖励",
+				HORIZONTAL_ALIGNMENT_LEFT, 80, 11, rcol)
 
 ## 载具：全部显示（车是大件地标，DMZ 的地图上也标车）。
 ## 这不算透视挂 —— 车不会主动杀你，能提前知道哪有车正是导航价值。
@@ -226,12 +240,22 @@ func _draw_extraction(c: Control, rect: Rect2, center: Vector2, scale: float) ->
 			c.draw_string(_font, mp + Vector2(6, -8), "撤离",
 				HORIZONTAL_ALIGNMENT_LEFT, 48, 11, col)
 
+func _clamp_map_pt(mp: Vector2, rect: Rect2, pad: float = 8.0) -> Vector2:
+	var r := rect.grow(-pad)
+	return Vector2(
+		clampf(mp.x, r.position.x, r.end.x),
+		clampf(mp.y, r.position.y, r.end.y))
+
 func _draw_depots(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
 	for d in get_tree().get_nodes_in_group("depots"):
 		if not is_instance_valid(d):
 			continue
 		var mp := _w2m(d.global_position, rect, center, scale)
-		if not rect.has_point(mp):
+		var calling: bool = d.has_method("is_calling") and bool(d.is_calling())
+		# 呼叫中：全图所有玩家都能在小地图上看到闪烁（超出视野则钉在边缘）
+		if calling:
+			mp = _clamp_map_pt(mp, rect)
+		elif not rect.has_point(mp):
 			continue
 		var col := Color(0.35, 0.95, 0.55, 0.95)
 		if d.has_method("accent_color"):
@@ -242,17 +266,25 @@ func _draw_depots(c: Control, rect: Rect2, center: Vector2, scale: float) -> voi
 			ready = bool(d.is_ready())
 		if consumed:
 			col = Color(0.42, 0.43, 0.46, 0.65)
+		elif calling:
+			var blink: float = 0.45 + 0.55 * sin(Time.get_ticks_msec() * 0.014)
+			col = Color(col.r, col.g, col.b, 0.35 + 0.65 * blink)
+			c.draw_circle(mp, 9.0 + blink * 5.0, Color(col.r, col.g, col.b, 0.22))
 		elif not ready:
 			col = Color(col.r, col.g, col.b, 0.45)
 		c.draw_rect(Rect2(mp - Vector2(4, 4), Vector2(8, 8)), col, true)
+		if calling:
+			c.draw_arc(mp, 7.0 + 3.0 * sin(Time.get_ticks_msec() * 0.014), 0, TAU, 14, col, 1.6)
 		if full_screen:
 			var mul: float = float(d.get("mul"))
 			var tag := "【提交点】×%.1f" % mul
 			if consumed:
 				tag = "【提交点】已用"
-			elif not ready and d.has_method("ready_remain"):
+			elif calling and d.has_method("ready_remain"):
 				var s: int = maxi(0, int(ceil(float(d.ready_remain()))))
-				tag = "【提交点】%d:%02d ×%.1f" % [s / 60, s % 60, mul]
+				tag = "【呼叫中】%d:%02d ×%.1f" % [s / 60, s % 60, mul]
+			elif not ready:
+				tag = "【呼叫点】×%.1f" % mul
 			c.draw_string(_font, mp + Vector2(6, -6), tag, HORIZONTAL_ALIGNMENT_LEFT, 110, 10, col)
 
 func _draw_crack_points(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
@@ -315,7 +347,9 @@ func _draw_contracts(c: Control, rect: Rect2, center: Vector2, scale: float) -> 
 		c.draw_circle(mp, 4.5, col)
 		c.draw_arc(mp, 8.0 + pulse * 2.0, 0, TAU, 16, col, 1.8)
 		if full_screen:
-			c.draw_string(_font, mp + Vector2(8, -4), "合约", HORIZONTAL_ALIGNMENT_LEFT, 50, 11, col)
+			var tag := str(b.get("title")) if str(b.get("title")) != "" else "合约"
+			c.draw_string(_font, mp + Vector2(8, -4), tag,
+				HORIZONTAL_ALIGNMENT_LEFT, 80, 11, col)
 	var con = world.get("contracts")
 	if con != null and is_instance_valid(con):
 		if con.player_is_rescuer():
@@ -343,8 +377,30 @@ func _draw_contracts(c: Control, rect: Rect2, center: Vector2, scale: float) -> 
 				c.draw_arc(ep, 7.0, 0, TAU, 16, Color(0.45, 0.95, 1.0), 2.0)
 				c.draw_circle(ep, 3.2, Color(0.45, 0.95, 1.0))
 				if full_screen:
-					c.draw_string(_font, ep + Vector2(8, -4), "人质撤离",
+					var tag := "人质撤离"
+					if int(con.get("kind")) == 3:
+						tag = "芯片上交"
+					c.draw_string(_font, ep + Vector2(8, -4), tag,
 						HORIZONTAL_ALIGNMENT_LEFT, 80, 11, Color(0.55, 0.95, 1.0))
+		if con.has_method("player_sees_intel") and con.player_sees_intel():
+			_draw_intel_blips(c, rect, center, scale)
+		if con.has_method("fail_ping_active") and con.fail_ping_active():
+			_draw_fail_ping(c, rect, center, scale, int(con.get("owner_team")))
+		if con.player_is_owner() and con.site_pos != Vector2.INF and int(con.get("kind")) in [1, 2]:
+			var sp2 := _w2m(con.site_pos, rect, center, scale)
+			if rect.has_point(sp2):
+				var scol := Color(0.40, 0.90, 1.0) if int(con.get("kind")) == 1 else Color(0.45, 0.95, 0.72)
+				c.draw_circle(sp2, 5.0, scol)
+				c.draw_arc(sp2, 8.0, 0, TAU, 14, scol, 1.6)
+		if con.player_is_owner() and con.mark_target != null and is_instance_valid(con.mark_target):
+			if not (con.mark_target.has_method("is_dead") and con.mark_target.is_dead()):
+				var mp2 := _w2m(con.mark_target.global_position, rect, center, scale)
+				if rect.has_point(mp2):
+					var pulse2: float = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.007)
+					c.draw_circle(mp2, 5.0 + pulse2 * 2.0, Color(1.0, 0.82, 0.28, 0.9))
+					if full_screen:
+						c.draw_string(_font, mp2 + Vector2(8, -4), "清洗目标",
+							HORIZONTAL_ALIGNMENT_LEFT, 80, 11, Color(1.0, 0.85, 0.4))
 		if con.player_is_snatcher() and con.snatch_pos != Vector2.INF:
 			var sp := _w2m(con.snatch_pos, rect, center, scale)
 			if rect.has_point(sp):
@@ -353,6 +409,42 @@ func _draw_contracts(c: Control, rect: Rect2, center: Vector2, scale: float) -> 
 				if full_screen:
 					c.draw_string(_font, sp + Vector2(8, -4), "交接点",
 						HORIZONTAL_ALIGNMENT_LEFT, 80, 11, Color(1.0, 0.62, 0.35))
+
+func _draw_intel_blips(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
+	var groups := ["enemies", "raider_bots", "human_players"]
+	for gname in groups:
+		for n in get_tree().get_nodes_in_group(gname):
+			if not is_instance_valid(n):
+				continue
+			if n.has_method("is_dead") and n.is_dead():
+				continue
+			if player != null and n == player:
+				continue
+			var bp := _w2m(n.global_position, rect, center, scale)
+			if not rect.has_point(bp):
+				continue
+			var col := Color(1.0, 0.45, 0.38, 0.9)
+			if n.is_in_group("human_players") or n.is_in_group("raider_bots"):
+				col = Color(1.0, 0.72, 0.28, 0.95)
+			c.draw_circle(bp, 3.2, col)
+
+func _draw_fail_ping(c: Control, rect: Rect2, center: Vector2, scale: float, team: int) -> void:
+	var pulse: float = 0.55 + 0.45 * sin(Time.get_ticks_msec() * 0.01)
+	var nodes: Array = []
+	nodes.append_array(get_tree().get_nodes_in_group("human_players"))
+	nodes.append_array(get_tree().get_nodes_in_group("raider_bots"))
+	for n in nodes:
+		if not is_instance_valid(n):
+			continue
+		if int(n.get("team_id")) != team:
+			continue
+		if n.has_method("is_dead") and n.is_dead():
+			continue
+		var bp := _w2m(n.global_position, rect, center, scale)
+		if not rect.has_point(bp):
+			continue
+		c.draw_circle(bp, 6.0 + pulse * 3.0, Color(1.0, 0.25, 0.22, 0.28))
+		c.draw_circle(bp, 4.0, Color(1.0, 0.35, 0.28, 0.95))
 
 func _draw_player(c: Control, rect: Rect2, center: Vector2, scale: float) -> void:
 	var mp := _w2m(player.global_position, rect, center, scale)
@@ -455,7 +547,15 @@ func _draw_extract_ticker(c: Control, rect: Rect2, y: float) -> float:
 			HORIZONTAL_ALIGNMENT_LEFT, w - 12, 12, Color(0.95, 0.98, 1.0, a))
 		y += 38.0
 	var dflash_t: float = float(world.get("depot_flash_t")) if "depot_flash_t" in world else 0.0
-	if dflash_t > 0.0:
+	var show_dflash := dflash_t > 0.0
+	if show_dflash and bool(world.get("depot_flash_near_only")):
+		var fp = world.get("depot_flash_pos")
+		if player == null or not (fp is Vector2) or fp == Vector2.INF:
+			show_dflash = false
+		else:
+			var lim: float = Tuning.depot_call_broadcast_m * 8.0
+			show_dflash = player.global_position.distance_to(fp) <= lim
+	if show_dflash:
 		var dtxt: String = str(world.get("depot_flash"))
 		var dmul: float = float(world.get("depot_flash_mul"))
 		var dcol := Color(0.35, 0.95, 0.55)
@@ -495,6 +595,7 @@ func _draw_map_legend(c: Control, rect: Rect2) -> void:
 		[Color(0.90, 0.78, 0.42), "开放 POI"],
 		[Color(0.95, 0.48, 0.44), "PvP POI"],
 		[Color(1.0, 0.84, 0.20), "免保"],
+		[Color(1.0, 0.78, 0.22), "合约奖励"],
 		[Color(0.92, 0.28, 0.28), "合约"],
 		[Color(0.35, 0.95, 0.55), "撤离点"],
 		[Color(0.82, 0.38, 1.0), "提交点"],

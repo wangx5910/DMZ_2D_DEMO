@@ -73,6 +73,7 @@ var _portal_channel_t: float = 0.0
 var _portal_channel_label: String = ""
 var _z_before_ship: int = 10
 var carried_hostage = null
+var contract_expose := false
 
 ## 本局结算：提交点折现进保险箱；背包与未提交寄存撤离时按倍率折现，死亡掉落
 var secured_value: int = 0

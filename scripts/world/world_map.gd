@@ -58,15 +58,21 @@ const EXTRACT_FLASH_LIFE := 8.0
 ## 提交点波次：越晚倍率越高。delay = 刷出后多久才能交互。
 const DEPOT_WAVES: Array = [
 	{"t": 0.0, "delay": 0.0, "count": 4, "mul": 1.0},
-	{"t": 60.0, "delay": 120.0, "count": 5, "mul": 2.0},
-	{"t": 180.0, "delay": 120.0, "count": 3, "mul": 5.0},
+	{"t": 60.0, "delay": 0.0, "count": 5, "mul": 2.0},
+	{"t": 180.0, "delay": 0.0, "count": 3, "mul": 5.0},
 ]
-const DEPOT_MIN_GAP := 720.0
+const DEPOT_MIN_GAP := 1400.0
+## 提交点旁小型战斗 POI（约 80×70m），远小于常规 240m 级 POI
+const DEPOT_POI_W := 16
+const DEPOT_POI_H := 14
 var depot_wave_spawned: Array[bool] = []
 var depot_ready_announced: Array[bool] = []
 var depot_flash := ""
 var depot_flash_t := 0.0
 var depot_flash_mul := 1.0
+var depot_flash_pos := Vector2.INF
+var depot_flash_near_only := false
+var _next_depot_uid := 1
 var spaceship = null
 var spaceship_spawned: bool = false
 var raid_time: float = 0.0
@@ -194,6 +200,7 @@ func _build() -> void:
 	_collect_stats()
 	_bg.queue_redraw()
 	queue_redraw()
+	add_to_group("world_map")
 
 # ── POI 生成 ────────────────────────────────────────────
 func _generate_pois() -> void:
@@ -446,6 +453,31 @@ func _bot_spawn_clear(pos: Vector2) -> bool:
 	q.collision_mask = 1 << 0
 	return space.intersect_shape(q, 1).is_empty()
 
+## 合约完成奖励：L4 免保同档金柜（需破解），落在任务点附近可站位置。
+func spawn_contract_reward(at: Vector2) -> Node:
+	var pos: Vector2 = at
+	var found := Vector2.INF
+	for i in 16:
+		var cand: Vector2 = at + Vector2.RIGHT.rotated(TAU * float(i) / 16.0) * 40.0
+		if _spot_is_clear(cand):
+			found = cand
+			break
+	if found != Vector2.INF:
+		pos = found
+	var node := Area2D.new()
+	node.set_script(container_script)
+	node.name = "ContractReward"
+	node.richness = "L4"
+	node.label = "合约奖励柜"
+	add_child(node)
+	node.global_position = pos
+	node.add_to_group("contract_reward")
+	node.cracked = false
+	node.z_index = 3
+	node.queue_redraw()
+	queue_redraw()
+	return node
+
 ## 死亡掉落：把背包物品做成可搜刮容器（流程与开箱相同）
 func spawn_corpse_bag(pos: Vector2, item_ids: Array, bag_label: String = "尸体背包", stash_ids: Array = []) -> Node:
 	var node := Area2D.new()
@@ -473,6 +505,8 @@ func spawn_enemies(fx) -> void:
 		# 但不低于基数 —— 大锤要求每个 POI 至少 6 个
 		if str(pd.get("type", "open")) == "pvp":
 			n = maxi(Tuning.enemies_per_poi_base, n - 1)
+		if bool(p.get("depot_site", false)) or str(pd.get("type", "")) == "depot":
+			n = 3
 		total += _spawn_in_poi(p, n)
 	stats["enemies"] = total
 
@@ -1490,8 +1524,6 @@ func _spawn_depot_wave(wave: int) -> void:
 	var spec: Dictionary = DEPOT_WAVES[wave]
 	var n: int = int(spec.get("count", 1))
 	var mul: float = float(spec.get("mul", 1.0))
-	var delay: float = float(spec.get("delay", 0.0))
-	var ready_time: float = raid_time + delay
 	var occupied: Array[Vector2] = []
 	if is_inside_tree():
 		for d in get_tree().get_nodes_in_group("depots"):
@@ -1503,14 +1535,21 @@ func _spawn_depot_wave(wave: int) -> void:
 		node.set_script(depot_script)
 		node.name = "Depot"
 		add_child(node)
-		node.setup(s, mul, ready_time, wave)
-	var delay_txt := "立即可用" if delay <= 0.01 else ("%.0f 秒后可用" % delay)
-	depot_flash = "提交点已刷新  ×%.1f  %d个  %s" % [mul, spots.size(), delay_txt]
+		var uid: int = _next_depot_uid
+		_next_depot_uid += 1
+		var placed: Vector2 = _attach_depot_poi(s, uid)
+		node.setup(placed, mul, 0.0, wave)
+		node.depot_uid = uid
+		node.global_position = placed
+	var delay_txt := "需呼叫后出现"
+	depot_flash = "提交呼叫点已刷新  ×%.1f  %d个  %s" % [mul, spots.size(), delay_txt]
 	depot_flash_t = EXTRACT_FLASH_LIFE
 	depot_flash_mul = mul
+	depot_flash_pos = Vector2.INF
+	depot_flash_near_only = false
 	queue_redraw()
 	RaidLog.log_event("depots_spawned", {
-		"wave": wave, "mul": mul, "count": spots.size(), "ready_at": ready_time,
+		"wave": wave, "mul": mul, "count": spots.size(),
 	})
 
 func _depot_ring_frac(mul: float) -> float:
@@ -1547,6 +1586,10 @@ func _place_depots_on_ring(mul: float, n: int, wave: int, occupied: Array[Vector
 			spot = _find_depot_spot(occupied)
 			if spot == Vector2.INF:
 				continue
+		if _find_depot_poi_origin(spot).x < 0:
+			spot = _find_depot_spot(occupied)
+			if spot == Vector2.INF or _find_depot_poi_origin(spot).x < 0:
+				continue
 		spots.append(spot)
 		occupied.append(spot)
 	return spots
@@ -1567,9 +1610,192 @@ func _find_depot_spot(existing: Array[Vector2]) -> Vector2:
 			if cand.distance_to(s) < DEPOT_MIN_GAP:
 				far_enough = false
 				break
-		if far_enough:
+		if far_enough and _find_depot_poi_origin(cand).x >= 0:
 			return cand
 	return Vector2.INF
+
+## 提交点旁生成小型战斗 POI；与大型 POI 重叠则挪开提交点。
+func _attach_depot_poi(preferred: Vector2, uid: int) -> Vector2:
+	var origin := _find_depot_poi_origin(preferred)
+	if origin.x < 0:
+		return preferred
+	var cfg = PoiGenerator.Config.new()
+	cfg.width = DEPOT_POI_W
+	cfg.height = DEPOT_POI_H
+	cfg.seed = 410000 + uid * 97 + NetHub.ensure_seed()
+	cfg.place_spawn = false
+	cfg.main_rows = 1
+	cfg.main_cols = 1
+	cfg.corridor_w = 2
+	cfg.corridor_jitter = 1
+	cfg.atrium_count = 0
+	cfg.interconnect_chance = 0.12
+	cfg.room_min = Vector2i(3, 3)
+	cfg.room_max = Vector2i(5, 4)
+	cfg.containers_l1 = 2
+	cfg.containers_l2 = 2
+	cfg.containers_l3 = 0
+	cfg.containers_l4 = 0
+	var gen = PoiGenerator.new(cfg)
+	if not gen.generate():
+		cfg.corridor_w = 2
+		cfg.corridor_jitter = 0
+		gen = PoiGenerator.new(cfg)
+		if not gen.generate():
+			return _cell_center(origin, Vector2i(cfg.width / 2, cfg.height / 2))
+	var holder := Node2D.new()
+	holder.name = "DepotPoi_%d" % uid
+	_walls_root.add_child(holder)
+	var walls := _build_poi_walls(gen, origin, holder)
+	var pd := {
+		"name": "提交据点",
+		"type": "depot",
+		"district": _district_key_at(origin),
+		"l4": 0,
+	}
+	var safe_cell: Vector2i = _spawn_poi_containers(gen, origin, pd)
+	_spawn_poi_corridor_covers(gen, origin, holder, safe_cell)
+	_spawn_poi_gates(gen, origin, holder)
+	var floor_rects := _bake_floor_rects(gen, origin)
+	var world_rect := Rect2(
+		Vector2(origin.x * TILE, origin.y * TILE),
+		Vector2(cfg.width * TILE, cfg.height * TILE))
+	var pack := {
+		"def": pd, "gen": gen, "origin": origin, "walls": walls,
+		"holder": holder, "rect": world_rect, "floors": floor_rects,
+		"active": true, "depot_site": true,
+	}
+	pois.append(pack)
+	if Tuning.enable_enemies and enemies_root != null and enemies_root.get_child_count() > 0:
+		_spawn_in_poi(pack, 3)
+	var stand: Vector2 = _depot_poi_stand_pos(pack, preferred)
+	queue_redraw()
+	return stand
+
+func _find_depot_poi_origin(preferred: Vector2) -> Vector2i:
+	var cx: int = int(floor(preferred.x / TILE)) - DEPOT_POI_W / 2
+	var cy: int = int(floor(preferred.y / TILE)) - DEPOT_POI_H / 2
+	var start := Vector2i(cx, cy)
+	if not _depot_poi_blocked(start):
+		return start
+	for ring in range(1, 28):
+		for dx in range(-ring, ring + 1):
+			for dy in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dy)) != ring:
+					continue
+				var o := Vector2i(start.x + dx * 2, start.y + dy * 2)
+				if not _depot_poi_blocked(o):
+					return o
+	for _try in 40:
+		var near := Vector2(
+			_rng.randf_range(preferred.x - 900.0, preferred.x + 900.0),
+			_rng.randf_range(preferred.y - 900.0, preferred.y + 900.0))
+		var cand := _find_open_spot(near, 0.0, 280.0)
+		if cand == Vector2.INF:
+			continue
+		var o2 := Vector2i(int(floor(cand.x / TILE)) - DEPOT_POI_W / 2,
+			int(floor(cand.y / TILE)) - DEPOT_POI_H / 2)
+		if not _depot_poi_blocked(o2):
+			return o2
+	return Vector2i(-1, -1)
+
+func _depot_poi_blocked(origin: Vector2i) -> bool:
+	if origin.x < 3 or origin.y < 3:
+		return true
+	if origin.x + DEPOT_POI_W >= world_size_cells - 3:
+		return true
+	if origin.y + DEPOT_POI_H >= world_size_cells - 3:
+		return true
+	var gap: float = POI_MIN_GAP_M * PX_PER_M
+	var r := Rect2(
+		Vector2(origin.x * TILE, origin.y * TILE),
+		Vector2(DEPOT_POI_W * TILE, DEPOT_POI_H * TILE)).grow(gap)
+	for p in pois:
+		if r.intersects(p["rect"] as Rect2):
+			return true
+	return false
+
+func _depot_poi_stand_pos(p: Dictionary, fallback: Vector2) -> Vector2:
+	var gen = p["gen"]
+	var origin: Vector2i = p["origin"]
+	var pool: Array = gen.standable_cells(true)
+	if pool.is_empty():
+		return fallback
+	var rc: Vector2 = (p["rect"] as Rect2).get_center()
+	var best: Vector2i = pool[0]
+	var best_d := INF
+	for c in pool:
+		var pos: Vector2 = _cell_center(origin, c)
+		var d: float = pos.distance_squared_to(rc)
+		if d < best_d:
+			best_d = d
+			best = c
+	return _cell_center(origin, best)
+
+func _district_key_at(origin: Vector2i) -> String:
+	for key in districts:
+		var r: Array = districts[key].get("rect", [])
+		if r.size() < 4:
+			continue
+		var rr := Rect2i(int(r[0]), int(r[1]), int(r[2]), int(r[3]))
+		if rr.has_point(origin):
+			return str(key)
+	return ""
+
+func find_depot(uid: int):
+	if not is_inside_tree():
+		return null
+	for d in get_tree().get_nodes_in_group("depots"):
+		if is_instance_valid(d) and int(d.get("depot_uid")) == uid:
+			return d
+	return null
+
+func on_depot_called(depot) -> void:
+	if depot == null or not is_instance_valid(depot):
+		return
+	depot_flash = "有人呼叫提交点  ×%.1f  ｜  %.0f 秒后出现" % [
+		float(depot.get("mul")), Tuning.depot_call_time]
+	depot_flash_t = EXTRACT_FLASH_LIFE
+	depot_flash_mul = float(depot.get("mul"))
+	depot_flash_pos = depot.global_position
+	depot_flash_near_only = true
+	queue_redraw()
+	RaidLog.log_event("depot_called", {"uid": int(depot.get("depot_uid")), "mul": float(depot.get("mul"))})
+
+func on_depot_opened(depot) -> void:
+	if depot == null or not is_instance_valid(depot):
+		return
+	_grant_stash_page_for_new_depot()
+	depot_flash = "提交点已出现  ×%.1f  可提交" % float(depot.get("mul"))
+	depot_flash_t = EXTRACT_FLASH_LIFE
+	depot_flash_mul = float(depot.get("mul"))
+	depot_flash_pos = depot.global_position
+	depot_flash_near_only = true
+	queue_redraw()
+	RaidLog.log_event("depot_opened", {"uid": int(depot.get("depot_uid"))})
+
+func hot_depots() -> Array:
+	var out: Array = []
+	if not is_inside_tree():
+		return out
+	for d in get_tree().get_nodes_in_group("depots"):
+		if not is_instance_valid(d) or bool(d.get("consumed")):
+			continue
+		if d.has_method("is_calling") and d.is_calling():
+			out.append(d)
+		elif d.has_method("is_open") and d.is_open():
+			out.append(d)
+	return out
+
+func nearest_hot_depot(from: Vector2, max_px: float):
+	var best = null
+	var best_d := max_px * max_px
+	for d in hot_depots():
+		var dd: float = from.distance_squared_to(d.global_position)
+		if dd < best_d:
+			best_d = dd
+			best = d
+	return best
 
 func _tick_depot_waves() -> void:
 	for i in DEPOT_WAVES.size():
@@ -1877,6 +2103,11 @@ func _tick_match(delta: float) -> void:
 	if depot_flash_t > 0.0:
 		depot_flash_t = maxf(0.0, depot_flash_t - delta)
 	_tick_depot_waves()
+	if is_inside_tree():
+		for d in get_tree().get_nodes_in_group("depots"):
+			if is_instance_valid(d) and d.has_method("is_calling") and d.is_calling():
+				queue_redraw()
+				break
 	# 撤离判定（单玩家：判自身；LAN 时为每个玩家各判各的）
 	var player_busy: bool = _player != null and (
 		bool(_player.get("raid_over")) or (_player.has_method("is_dead") and _player.is_dead()))
@@ -1996,6 +2227,7 @@ func _draw() -> void:
 		else:
 			_draw_poi_far(p)
 	_draw_free_safes()
+	_draw_contract_rewards()
 	_draw_squad_spawns()
 	_draw_landmarks()
 	_draw_extraction()
@@ -2060,18 +2292,23 @@ func _draw_depots() -> void:
 		var col := Color(0.35, 0.95, 0.55)
 		if d.has_method("accent_color"):
 			col = d.accent_color()
+		var calling: bool = d.has_method("is_calling") and bool(d.is_calling())
 		var ready := true
 		if d.has_method("is_ready"):
 			ready = bool(d.is_ready())
 		if bool(d.get("consumed")):
 			col = Color(0.42, 0.43, 0.46, 0.7)
+		elif calling:
+			col = col.lightened(0.1)
 		elif not ready:
 			col = col.darkened(0.4)
-		var pulse: float = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.005)
+		var pulse: float = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012 if calling else 0.005)
 		var pos: Vector2 = d.global_position
-		draw_circle(pos, 42.0, Color(col.r, col.g, col.b, 0.10 if ready and not bool(d.get("consumed")) else 0.04))
+		draw_circle(pos, 42.0, Color(col.r, col.g, col.b, 0.10 if (ready or calling) and not bool(d.get("consumed")) else 0.04))
 		draw_arc(pos, 42.0, 0, TAU, 28, col, 2.0)
-		if ready and not bool(d.get("consumed")):
+		if calling:
+			draw_arc(pos, 22.0 + 18.0 * pulse, 0, TAU, 28, Color(col.r, col.g, col.b, 0.7), 2.4)
+		elif ready and not bool(d.get("consumed")):
 			draw_arc(pos, 26.0 + 8.0 * pulse, 0, TAU, 20, Color(col.r, col.g, col.b, 0.45), 1.6)
 
 func _draw_contract_extract() -> void:
@@ -2085,8 +2322,22 @@ func _draw_contract_extract() -> void:
 		draw_circle(ep, r, Color(0.15, 0.45, 0.55, 0.12))
 		draw_arc(ep, r, 0, TAU, 40, col, 2.6)
 		draw_arc(ep, r * (0.4 + 0.28 * pulse), 0, TAU, 28, Color(1.0, 0.85, 0.35, 0.7), 2.0)
+		var lab := "人质撤离点"
+		if int(contracts.get("kind")) == 3:
+			lab = "芯片上交点"
 		draw_string(ThemeDB.fallback_font, ep + Vector2(0, -r - 14),
-			"人质撤离点", HORIZONTAL_ALIGNMENT_CENTER, 160, 22, col)
+			lab, HORIZONTAL_ALIGNMENT_CENTER, 160, 22, col)
+	if contracts.player_is_owner() and contracts.site_pos != Vector2.INF \
+			and int(contracts.get("kind")) in [1, 2]:
+		var sp: Vector2 = contracts.site_pos
+		var sr: float = float(contracts.get("site_radius"))
+		var scol := Color(0.40, 0.85, 1.0) if int(contracts.get("kind")) == 1 else Color(0.40, 0.95, 0.72)
+		draw_circle(sp, sr, Color(scol.r, scol.g, scol.b, 0.10))
+		draw_arc(sp, sr, 0, TAU, 40, scol, 2.2)
+		draw_arc(sp, sr * (0.4 + 0.25 * pulse), 0, TAU, 28, Color(1.0, 0.85, 0.35, 0.65), 1.8)
+		var slab := "上传点" if int(contracts.get("kind")) == 1 else "塔台"
+		draw_string(ThemeDB.fallback_font, sp + Vector2(0, -sr - 14),
+			slab, HORIZONTAL_ALIGNMENT_CENTER, 120, 20, scol)
 	if contracts.player_is_snatcher() and contracts.snatch_pos != Vector2.INF:
 		var sp: Vector2 = contracts.snatch_pos
 		var scol := Color(1.0, 0.52, 0.28, 0.95)
@@ -2157,6 +2408,21 @@ func _draw_free_safes() -> void:
 		draw_circle(p, 8.5, Color(1.0, 0.78, 0.20, 0.95))
 		draw_string(ThemeDB.fallback_font, p + Vector2(0, -46), "【免保】",
 			HORIZONTAL_ALIGNMENT_CENTER, 100, 18, Color(1.0, 0.86, 0.32, 0.96))
+
+func _draw_contract_rewards() -> void:
+	if get_tree() == null:
+		return
+	for n in get_tree().get_nodes_in_group("contract_reward"):
+		if n == null or not is_instance_valid(n):
+			continue
+		if n.has_method("is_fully_searched") and n.is_fully_searched():
+			continue
+		var p: Vector2 = n.global_position
+		draw_circle(p, 38.0, Color(1.0, 0.78, 0.22, 0.14))
+		draw_arc(p, 38.0, 0, TAU, 32, Color(1.0, 0.82, 0.28, 0.92), 3.0)
+		draw_circle(p, 8.5, Color(1.0, 0.72, 0.18, 0.95))
+		draw_string(ThemeDB.fallback_font, p + Vector2(0, -46), "【合约奖励】",
+			HORIZONTAL_ALIGNMENT_CENTER, 140, 18, Color(1.0, 0.88, 0.38, 0.96))
 
 func _draw_cell(origin: Vector2i, x: int, y: int, col: Color) -> void:
 	draw_rect(Rect2(

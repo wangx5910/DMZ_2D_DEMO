@@ -172,16 +172,26 @@ var contract_hostage_chests: int = 5        ## 人质房紫色箱数量（另有
 var contract_extract_m: float = 600.0       ## 人质撤离点距离（米）
 var contract_extract_radius: float = 90.0   ## 人质撤离圈半径（像素）
 var contract_extract_hold: float = 8.0      ## 人质撤离驻守时长（秒）
+var contract_upload_hold: float = 25.0      ## 静默上传读条（秒）
+var contract_tower_hold: float = 20.0       ## 塔台劫持读条（秒）
+var contract_intel_time: float = 28.0       ## 塔台成功：全图人形可见时长
+var contract_fail_ping_time: float = 16.0   ## 塔台失败：反 ping 自己的时长
+var contract_hit_interrupt: float = 0.55    ## 上传/占塔：受击后多久内算打断
 var hostage_hp: float = 80.0
 var carry_hostage_speed_mul: float = 0.82   ## 背人质时移速
 var enable_phone_contracts: bool = false    ## 电话合约（搅动普通合约）· 暂时关闭「抢回人质」
 var phone_contract_window: float = 10.0     ## 来电未接自动取消（秒）
 var phone_contract_hold: float = 1.2        ## 长按 E 接听时长（秒）
 var phone_ping_interval: float = 3.0        ## 抢回人质：小地图坐标刷新间隔
+var depot_call_time: float = 40.0           ## 呼叫后多少秒提交点才出现
+var depot_call_broadcast_m: float = 100.0   ## 呼叫后向附近多少米内玩家广播
+var depot_ai_rush_m: float = 700.0          ## AI 赶去抢点的感知距离（米）
 
 
 # ── 相机 ────────────────────────────────────────────────
-var camera_zoom: float = 1.0
+var camera_zoom: float = 1.75           ## 默认拉近，人物更大
+var camera_zoom_min: float = 0.65
+var camera_zoom_max: float = 2.85
 ## 相机向鼠标方向前瞻的比例（0 = 完全锁角色）
 var camera_look_ahead: float = 0.22
 var camera_look_ahead_max: float = 190.0
@@ -333,14 +343,23 @@ const SPEC := {
 		["contract_hostage_chests", 2.0, 10.0],
 		["contract_extract_m", 200.0, 1500.0],
 		["contract_extract_hold", 2.0, 30.0],
+		["contract_upload_hold", 8.0, 60.0],
+		["contract_tower_hold", 8.0, 60.0],
+		["contract_intel_time", 8.0, 60.0],
+		["contract_fail_ping_time", 4.0, 40.0],
 		["hostage_hp", 20.0, 200.0],
 		["carry_hostage_speed_mul", 0.4, 1.0],
 		["phone_contract_window", 3.0, 30.0],
 		["phone_contract_hold", 0.4, 4.0],
 		["phone_ping_interval", 1.0, 8.0],
+		["depot_call_time", 10.0, 180.0],
+		["depot_call_broadcast_m", 40.0, 400.0],
+		["depot_ai_rush_m", 80.0, 800.0],
 	],
 	"相机": [
-		["camera_zoom", 0.4, 2.5],
+		["camera_zoom", 0.55, 3.2],
+		["camera_zoom_min", 0.4, 1.2],
+		["camera_zoom_max", 1.4, 3.6],
 		["camera_look_ahead", 0.0, 0.8],
 		["camera_look_ahead_max", 0.0, 500.0],
 		["camera_smooth", 1.0, 30.0],

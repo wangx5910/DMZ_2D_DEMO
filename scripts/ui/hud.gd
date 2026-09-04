@@ -215,11 +215,29 @@ func _draw_hud() -> void:
 		var role := "房主" if NetHub.mode == NetHub.Mode.HOST else "加入"
 		var extra := ""
 		if NetHub.mode == NetHub.Mode.HOST:
-			extra = "  %s:%d" % [NetHub.primary_ip(), NetHub.bind_port]
+			extra = "  %s:%d%s" % [
+				NetHub.primary_ip(), NetHub.bind_port,
+				"  Tailscale" if NetHub.has_tailscale() else ""]
 		c.draw_string(_font, Vector2(28, 54),
 			"局域网 %s  人数 %d/%d  你是 P%d%s" % [
 				role, NetHub.player_count(), NetHub.MAX_PLAYERS, NetHub.local_peer_id, extra],
-			HORIZONTAL_ALIGNMENT_LEFT, 720, 13, Color(0.55, 0.92, 0.72))
+			HORIZONTAL_ALIGNMENT_LEFT, 920, 13, Color(0.55, 0.92, 0.72))
+		if NetHub.mode == NetHub.Mode.HOST:
+			var others: PackedStringArray = []
+			for e in NetHub.lan_addresses():
+				var ip: String = str(e.get("ip", ""))
+				if ip == NetHub.primary_ip():
+					continue
+				if bool(e.get("tailscale", false)):
+					others.append(ip + "(Tailscale)")
+				elif bool(e.get("virtual", false)):
+					others.append(ip + "(虚拟)")
+				else:
+					others.append(ip)
+			if others.size() > 0:
+				c.draw_string(_font, Vector2(28, 70),
+					"其他本机地址  " + "  ".join(others),
+					HORIZONTAL_ALIGNMENT_LEFT, 920, 12, Color(0.50, 0.70, 0.62))
 
 	# ── 撤离 / 飞船 流程信息 ──
 	_draw_flow(c, vp)
@@ -300,6 +318,10 @@ func _draw_flow(c: Control, vp: Vector2) -> void:
 	if world == null:
 		return
 	var y := 56.0
+	if NetHub.is_online():
+		y = 72.0
+		if NetHub.mode == NetHub.Mode.HOST and NetHub.lan_addresses().size() > 1:
+			y = 88.0
 	var upcoming: PackedStringArray = []
 	if Tuning.enable_spaceship and not bool(world.get("spaceship_spawned")) and "raid_time" in world:
 		var st: float = Tuning.spaceship_spawn_time - float(world.raid_time)
@@ -308,6 +330,16 @@ func _draw_flow(c: Control, vp: Vector2) -> void:
 	if not upcoming.is_empty():
 		c.draw_string(_font, Vector2(28, y), " ｜ ".join(upcoming) + " 后出现",
 			HORIZONTAL_ALIGNMENT_LEFT, 520, 13, Color(0.78, 0.72, 0.55))
+		y += 16.0
+	if world != null and float(world.get("depot_flash_t")) > 0.0:
+		var show := true
+		if bool(world.get("depot_flash_near_only")):
+			var fp = world.get("depot_flash_pos")
+			show = player != null and fp is Vector2 and fp != Vector2.INF \
+				and player.global_position.distance_to(fp) <= Tuning.depot_call_broadcast_m * 8.0
+		if show:
+			c.draw_string(_font, Vector2(0, y + 8), str(world.get("depot_flash")),
+				HORIZONTAL_ALIGNMENT_CENTER, vp.x, 16, Color(0.95, 0.72, 1.0))
 	# 撤离
 	if Tuning.enable_extraction and not world.is_extracted():
 		if world.extraction_in_zone():
@@ -449,7 +481,11 @@ func _draw_contract(c: Control, vp: Vector2) -> void:
 	var hold_t: float = 0.0
 	if con.player_is_snatcher():
 		hold_t = float(con.get("snatch_t"))
-	elif con.extract_pos != Vector2.INF:
+	elif con.player_is_owner() and (int(con.get("kind")) == 1 or int(con.get("kind")) == 2):
+		hold_t = float(con.get("hold_t"))
+		if not bool(con.get("exposing")) and hold_t <= 0.01:
+			hold_t = 0.0
+	elif con.player_is_owner() and con.extract_pos != Vector2.INF:
 		hold_t = float(con.get("extract_t"))
 	if hold_t > 0.0:
 		var prog: float = con.extract_progress()

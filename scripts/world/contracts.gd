@@ -8,14 +8,30 @@ enum PhonePhase { IDLE, RINGING, ACCEPTED, DECLINED, SUCCESS, FAILED }
 const PX_PER_M := 8.0
 const BOARD := preload("res://scripts/world/contract_board.gd")
 const HOSTAGE := preload("res://scripts/world/hostage.gd")
+const SITE := preload("res://scripts/world/contract_site.gd")
+const CHIP_ID := "corp_id_chip"
 const PHONE_LINE := "V，听说漩涡帮派人要带走一个重要人物，但是公司不鼓励这种行为，你愿意出面解决掉他们吗，这报酬可不菲。"
+
+enum Kind { RESCUE, UPLOAD, TOWER, PURGE }
 
 var world = null
 var _fx = null
 var phase: int = Phase.NONE
+var kind: int = Kind.RESCUE
 var time_left: float = 0.0
 var board = null
+var offered_boards: Array = []
 var hostage = null
+var site = null
+var site_pos := Vector2.INF
+var site_radius := 72.0
+var hold_t := 0.0
+var hold_need := 25.0
+var intel_t := 0.0
+var fail_ping_t := 0.0
+var reward_chest = null
+var exposing := false
+var mark_target = null
 var extract_pos := Vector2.INF
 var extract_t := 0.0
 var offer_poi_name := ""
@@ -24,6 +40,8 @@ var hostage_spawn_pos := Vector2.INF
 var _hostage_poi := {}
 var hostage_doors: Array = []
 var _hostage_prepared := false
+var _kind_sites: Dictionary = {}
+var _exposed_actor = null
 var status_line := ""
 var owner_team: int = -1
 var _rng := RandomNumberGenerator.new()
@@ -54,10 +72,23 @@ func phone_dialogue() -> String:
 	return PHONE_LINE
 
 func player_is_rescuer() -> bool:
+	return player_is_owner()
+
+func player_is_owner() -> bool:
 	var p = _player()
 	if p == null or owner_team < 0:
 		return false
-	return int(p.get("team_id")) == owner_team and has_active_contract()
+	if int(p.get("team_id")) != owner_team:
+		return false
+	return has_active_contract() or intel_t > 0.0
+
+func player_sees_intel() -> bool:
+	if intel_t <= 0.0:
+		return false
+	var p = _player()
+	if p == null or owner_team < 0:
+		return false
+	return int(p.get("team_id")) == owner_team
 
 func player_is_snatcher() -> bool:
 	return phone_phase == PhonePhase.ACCEPTED
@@ -68,54 +99,55 @@ func phone_hold_progress() -> float:
 func spawn_opening() -> void:
 	if world == null:
 		return
-	var safe = _pick_offer_safe()
-	var pos := Vector2.ZERO
-	if safe != null and is_instance_valid(safe):
-		pos = _board_pos_beside_safe(safe)
-		offer_poi_name = str(safe.get_meta("poi_name", "免保点"))
-	else:
-		if world.pois.is_empty():
-			return
-		var offer_poi: Dictionary = _pick_offer_poi()
-		if offer_poi.is_empty():
-			return
-		pos = _standable_in(offer_poi)
-		offer_poi_name = str(offer_poi["def"].get("name", "POI"))
-	board = Area2D.new()
-	board.set_script(BOARD)
-	add_child(board)
-	board.setup(self, pos, "救援人质")
+	offered_boards.clear()
+	_kind_sites.clear()
+	var specs: Array = [
+		{"kind": Kind.RESCUE, "title": "救援人质"},
+		{"kind": Kind.UPLOAD, "title": "静默上传"},
+		{"kind": Kind.TOWER, "title": "塔台劫持"},
+		{"kind": Kind.PURGE, "title": "公司清洗"},
+	]
+	var safes: Array = _list_offer_safes()
+	var used_pos: Array = []
+	for spec in specs:
+		var k: int = int(spec["kind"])
+		if not _prepare_kind(k):
+			continue
+		var pos: Vector2 = _next_board_pos(safes, used_pos)
+		if pos == Vector2.ZERO and not used_pos.is_empty():
+			pos = used_pos[0] + Vector2.RIGHT.rotated(float(offered_boards.size()) * 1.1) * 52.0
+		var b = Area2D.new()
+		b.set_script(BOARD)
+		add_child(b)
+		b.setup(self, pos, str(spec["title"]), k)
+		offered_boards.append(b)
+		used_pos.append(pos)
+	if offered_boards.is_empty():
+		return
+	board = offered_boards[0]
 	phase = Phase.OFFERED
-	status_line = "合约点已刷新：%s 免保旁（小地图高亮）" % offer_poi_name
-	_prepare_hostage_den()
-	RaidLog.log_event("contract_offered", {"poi": offer_poi_name, "type": "rescue", "beside_safe": true})
+	offer_poi_name = _safe_name(board)
+	status_line = "合约点已刷新：救援 / 上传 / 塔台 / 清洗（免保旁，同时只能接一个）"
+	RaidLog.log_event("contract_offered", {"count": offered_boards.size(), "beside_safe": true})
 
 func accept_from_board(b, actor = null) -> bool:
-	if phase != Phase.OFFERED or b != board:
+	if phase != Phase.OFFERED or b == null or not is_instance_valid(b):
 		return false
 	if has_active_contract():
 		return false
-	if not _hostage_prepared:
-		if not _prepare_hostage_den():
-			status_line = "附近没有可关押人质的房间"
-			return false
-	if hostage_spawn_pos == Vector2.INF or _hostage_poi.is_empty():
-		status_line = "人质房间无效"
+	if not offered_boards.has(b) and b != board:
 		return false
-	hostage = CharacterBody2D.new()
-	hostage.set_script(HOSTAGE)
-	add_child(hostage)
-	hostage.setup(self, hostage_spawn_pos, "人质·艾拉")
-	for d in hostage_doors:
-		if is_instance_valid(d) and d.has_method("unlock"):
-			d.unlock()
+	kind = int(b.get("kind"))
+	if not _activate_kind(kind, actor):
+		return false
 	owner_team = _actor_team(actor)
-	_remove_board()
+	_consume_all_boards()
 	time_left = Tuning.contract_hostage_time
 	phase = Phase.ACTIVE
-	status_line = "已接取：救援人质 → 前往 %s" % hostage_poi_name
-	RaidLog.log_event("contract_accepted", {"hostage_poi": hostage_poi_name, "team": owner_team})
-	_maybe_ring_phone()
+	status_line = _active_status()
+	RaidLog.log_event("contract_accepted", {"kind": kind, "poi": hostage_poi_name, "team": owner_team})
+	if kind == Kind.RESCUE:
+		_maybe_ring_phone()
 	if world != null:
 		world.queue_redraw()
 	return true
@@ -141,6 +173,13 @@ func _prepare_hostage_den() -> bool:
 	for p in ranked:
 		if not exclude.is_empty() and p == exclude:
 			continue
+		var taken := false
+		for k in _kind_sites:
+			if _kind_sites[k].get("poi", {}) == p:
+				taken = true
+				break
+		if taken:
+			continue
 		ordered.append(p)
 	if not exclude.is_empty():
 		ordered.append(exclude)
@@ -164,6 +203,366 @@ func _prepare_hostage_den() -> bool:
 	push_warning("人质房间准备失败：没有合适的 POI 房间")
 	return false
 
+func _prepare_kind(k: int) -> bool:
+	match k:
+		Kind.RESCUE, Kind.UPLOAD:
+			if not _prepare_hostage_den():
+				return false
+			var pack := {
+				"poi": _hostage_poi,
+				"poi_name": hostage_poi_name,
+				"spawn": hostage_spawn_pos,
+				"doors": hostage_doors.duplicate(),
+			}
+			_kind_sites[k] = pack
+			if k == Kind.UPLOAD:
+				_spawn_site(hostage_spawn_pos, 0, "上传机柜")
+				pack["site"] = site
+			return true
+		Kind.TOWER:
+			return _prepare_tower()
+		Kind.PURGE:
+			return _prepare_purge()
+	return false
+
+func _activate_kind(k: int, _actor) -> bool:
+	var pack: Dictionary = _kind_sites.get(k, {})
+	match k:
+		Kind.RESCUE:
+			_apply_site_pack(pack)
+			if hostage_spawn_pos == Vector2.INF:
+				status_line = "人质房间无效"
+				return false
+			hostage = CharacterBody2D.new()
+			hostage.set_script(HOSTAGE)
+			add_child(hostage)
+			hostage.setup(self, hostage_spawn_pos, "人质·艾拉")
+			_unlock_doors(hostage_doors)
+			return true
+		Kind.UPLOAD:
+			_apply_site_pack(pack)
+			if hostage_spawn_pos == Vector2.INF:
+				status_line = "上传机房无效"
+				return false
+			site_pos = hostage_spawn_pos
+			site_radius = 70.0
+			hold_need = Tuning.contract_upload_hold
+			hold_t = 0.0
+			_unlock_doors(hostage_doors)
+			if pack.get("site") != null:
+				site = pack["site"]
+			return true
+		Kind.TOWER:
+			_apply_site_pack(pack)
+			if site_pos == Vector2.INF:
+				site_pos = pack.get("spawn", Vector2.INF)
+			if site_pos == Vector2.INF:
+				status_line = "塔台无效"
+				return false
+			site_radius = 92.0
+			hold_need = Tuning.contract_tower_hold
+			hold_t = 0.0
+			if pack.get("site") != null:
+				site = pack["site"]
+			if Tuning.enable_enemies and world != null and world.has_method("_spawn_in_poi") \
+					and not pack.get("poi", {}).is_empty():
+				world._spawn_in_poi(pack["poi"], 8)
+			return true
+		Kind.PURGE:
+			if not _mark_purge_target():
+				status_line = "清洗目标已消失"
+				return false
+			return true
+	return false
+
+func _apply_site_pack(pack: Dictionary) -> void:
+	if pack.is_empty():
+		return
+	_hostage_poi = pack.get("poi", {})
+	hostage_poi_name = str(pack.get("poi_name", ""))
+	hostage_spawn_pos = pack.get("spawn", Vector2.INF)
+	hostage_doors = pack.get("doors", [])
+	if pack.has("spawn") and kind == Kind.TOWER:
+		site_pos = pack["spawn"]
+
+func _unlock_doors(doors: Array) -> void:
+	for d in doors:
+		if is_instance_valid(d) and d.has_method("unlock"):
+			d.unlock()
+
+func _spawn_site(pos: Vector2, site_kind: int, tag: String) -> void:
+	var n := Node2D.new()
+	n.set_script(SITE)
+	add_child(n)
+	n.setup(pos, site_kind, tag)
+	site = n
+
+func _prepare_tower() -> bool:
+	if world == null or world.pois.is_empty():
+		return false
+	var exclude: Dictionary = _offer_poi()
+	var p: Dictionary = _nearest_poi_to(world.spawn_point, exclude)
+	if p.is_empty():
+		p = world.pois[0]
+	var pos: Vector2 = _corridor_near(p, (p["rect"] as Rect2).get_center())
+	_spawn_site(pos, 1, "塔台")
+	_kind_sites[Kind.TOWER] = {
+		"poi": p, "poi_name": str(p["def"].get("name", "POI")),
+		"spawn": pos, "doors": [], "site": site,
+	}
+	return true
+
+func _prepare_purge() -> bool:
+	var t = _pick_purge_candidate()
+	if t == null:
+		return false
+	_kind_sites[Kind.PURGE] = {
+		"poi": {}, "poi_name": "目标单位", "spawn": t.global_position, "doors": [], "target": t,
+	}
+	return true
+
+func _pick_purge_candidate():
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var pool: Array = []
+	for g in tree.get_nodes_in_group("enemies"):
+		if is_instance_valid(g) and not (g.has_method("is_dead") and g.is_dead()):
+			pool.append(g)
+	if pool.is_empty():
+		for b in tree.get_nodes_in_group("raider_bots"):
+			if is_instance_valid(b) and not (b.has_method("is_dead") and b.is_dead()):
+				if int(b.get("team_id")) == 0:
+					continue
+				pool.append(b)
+	if pool.is_empty():
+		return null
+	return pool[_rng.randi() % pool.size()]
+
+func _mark_purge_target() -> bool:
+	var t = _kind_sites.get(Kind.PURGE, {}).get("target", null)
+	if t == null or not is_instance_valid(t) or (t.has_method("is_dead") and t.is_dead()):
+		t = _pick_purge_candidate()
+	if t == null:
+		return false
+	mark_target = t
+	if t.has_method("mark_for_contract"):
+		t.mark_for_contract()
+	else:
+		t.set("contract_mark", true)
+		t.add_to_group("contract_marks")
+		if t.get("inv") != null and t.inv.has_method("grant_no_weight"):
+			t.inv.grant_no_weight(CHIP_ID)
+	hostage_poi_name = "清洗目标"
+	return true
+
+func on_mark_killed(who) -> void:
+	if kind != Kind.PURGE or phase != Phase.ACTIVE:
+		return
+	if who != mark_target and (mark_target == null or not is_instance_valid(mark_target)):
+		if who != null and bool(who.get("contract_mark")):
+			mark_target = who
+	status_line = "目标已倒 · 搜刮证件芯片，送到上交点"
+	phase = Phase.EXTRACT
+	_spawn_extract_point()
+	if world != null:
+		world.queue_redraw()
+
+func _list_offer_safes() -> Array:
+	var out: Array = []
+	var player_safe = world.get("player_spawn_target_safe") if world != null else null
+	var nodes = world.get("free_safe_nodes") if world != null else null
+	if nodes is Array:
+		for n in nodes:
+			if n != null and is_instance_valid(n) and n != player_safe:
+				out.append(n)
+		if out.is_empty():
+			for n2 in nodes:
+				if n2 != null and is_instance_valid(n2):
+					out.append(n2)
+	return out
+
+func _next_board_pos(safes: Array, used: Array) -> Vector2:
+	var idx: int = used.size()
+	if safes.is_empty():
+		if world != null and not world.pois.is_empty():
+			return _standable_in(world.pois[mini(idx, world.pois.size() - 1)])
+		return Vector2.ZERO
+	var safe = safes[idx % safes.size()]
+	var pos: Vector2 = _board_pos_beside_safe(safe)
+	var bump := 0
+	while bump < 6:
+		var clash := false
+		for u in used:
+			if pos.distance_to(u) < 36.0:
+				clash = true
+				break
+		if not clash:
+			break
+		pos += Vector2.RIGHT.rotated(float(bump) * 1.05) * 44.0
+		bump += 1
+	return pos
+
+func _safe_name(b) -> String:
+	if b == null:
+		return "免保点"
+	if world != null and world.has_method("_poi_by_point"):
+		var p: Dictionary = world._poi_by_point(b.global_position)
+		if not p.is_empty():
+			return str(p["def"].get("name", "免保点"))
+	return "免保点"
+
+func _offer_poi() -> Dictionary:
+	if world == null:
+		return {}
+	var s = _pick_offer_safe()
+	if s != null and is_instance_valid(s) and world.has_method("_poi_by_point"):
+		return world._poi_by_point(s.global_position)
+	return {}
+
+func _consume_all_boards() -> void:
+	for b in offered_boards:
+		if is_instance_valid(b):
+			if b.has_method("mark_consumed"):
+				b.mark_consumed()
+			b.queue_free()
+	offered_boards.clear()
+	board = null
+
+func _active_status() -> String:
+	match kind:
+		Kind.UPLOAD:
+			return "已接取：静默上传 → 机房站桩 %.0f 秒（中弹打断）" % hold_need
+		Kind.TOWER:
+			return "已接取：塔台劫持 → 占塔 %.0f 秒" % hold_need
+		Kind.PURGE:
+			return "已接取：公司清洗 → 击倒标记目标，搜芯片上交"
+		_:
+			return "已接取：救援人质 → 前往 %s" % hostage_poi_name
+
+func _owner_in_zone(pos: Vector2, r: float):
+	if pos == Vector2.INF:
+		return null
+	for n in _owner_team_actors():
+		if n.global_position.distance_to(pos) <= r:
+			return n
+	return null
+
+func _owner_team_actors() -> Array:
+	var out: Array = []
+	var tree := get_tree()
+	if tree == null:
+		return out
+	var nodes: Array = []
+	nodes.append_array(tree.get_nodes_in_group("human_players"))
+	nodes.append_array(tree.get_nodes_in_group("raider_bots"))
+	for n in nodes:
+		if not is_instance_valid(n):
+			continue
+		if n.has_method("is_dead") and n.is_dead():
+			continue
+		if int(n.get("team_id")) != owner_team:
+			continue
+		out.append(n)
+	return out
+
+func _owner_team_alive() -> bool:
+	return not _owner_team_actors().is_empty()
+
+func _recently_hit(who) -> bool:
+	if who == null or who.get("health") == null:
+		return false
+	return who.health.since_hit() <= Tuning.contract_hit_interrupt
+
+func _set_expose(who, on: bool) -> void:
+	exposing = on
+	if _exposed_actor != null and is_instance_valid(_exposed_actor) and _exposed_actor != who:
+		_exposed_actor.set("contract_expose", false)
+	if who != null and is_instance_valid(who):
+		who.set("contract_expose", on)
+		_exposed_actor = who if on else null
+	else:
+		if _exposed_actor != null and is_instance_valid(_exposed_actor):
+			_exposed_actor.set("contract_expose", false)
+		_exposed_actor = null
+		var p = _player()
+		if p != null:
+			p.set("contract_expose", false)
+
+func _tick_hold(delta: float) -> void:
+	if kind != Kind.UPLOAD and kind != Kind.TOWER:
+		return
+	if phase != Phase.ACTIVE:
+		_set_expose(null, false)
+		return
+	var actor = _owner_in_zone(site_pos, site_radius)
+	if actor == null:
+		_set_expose(null, false)
+		hold_t = maxf(0.0, hold_t - delta * 1.5)
+		if kind == Kind.TOWER and not _owner_team_alive():
+			fail_contract("占塔失败")
+		return
+	_set_expose(actor, true)
+	if _recently_hit(actor):
+		hold_t = maxf(0.0, hold_t - delta * 2.8)
+		return
+	hold_t += delta
+	if hold_t >= hold_need:
+		if kind == Kind.TOWER:
+			_succeed_generic("合约完成：塔台已劫持", "tower")
+			intel_t = Tuning.contract_intel_time
+		else:
+			_succeed_generic("合约完成：数据包已上传", "upload")
+
+func _succeed_generic(line: String, type_key: String) -> void:
+	_spawn_reward_chest()
+	phase = Phase.SUCCESS
+	status_line = "%s ｜ 任务点已投放奖励柜" % line
+	extract_pos = Vector2.INF
+	hold_t = hold_need
+	_set_expose(null, false)
+	RaidLog.log_event("contract_success", {"type": type_key})
+	if world != null:
+		world.queue_redraw()
+
+func _spawn_reward_chest() -> void:
+	if reward_chest != null and is_instance_valid(reward_chest):
+		return
+	var at: Vector2 = site_pos
+	if at == Vector2.INF:
+		at = extract_pos
+	if at == Vector2.INF:
+		var p = _player()
+		at = p.global_position if p != null else Vector2.ZERO
+	if world == null or not world.has_method("spawn_contract_reward"):
+		return
+	reward_chest = world.spawn_contract_reward(at)
+
+func _tick_purge_extract(delta: float) -> void:
+	if kind != Kind.PURGE or phase != Phase.EXTRACT:
+		return
+	if extract_pos == Vector2.INF:
+		return
+	if _owner_has_chip() and _team_member_in_zone(owner_team, extract_pos, Tuning.contract_extract_radius):
+		extract_t += delta
+		if extract_t >= Tuning.contract_extract_hold:
+			_succeed_generic("合约完成：证件芯片已上交", "purge")
+	else:
+		extract_t = maxf(0.0, extract_t - delta * 1.5)
+
+func _owner_has_chip() -> bool:
+	for n in _owner_team_actors():
+		if n.get("inv") != null and n.inv.has_method("has_id") and n.inv.has_id(CHIP_ID):
+			return true
+	return false
+
+func fail_ping_active() -> bool:
+	return fail_ping_t > 0.0
+
+func hold_progress() -> float:
+	return clampf(hold_t / maxf(hold_need, 0.01), 0.0, 1.0)
+
+
 func on_hostage_picked(who = null) -> void:
 	if phase != Phase.ACTIVE and phase != Phase.EXTRACT:
 		return
@@ -180,7 +579,10 @@ func fail_contract(reason: String) -> void:
 	phase = Phase.FAILED
 	status_line = "合约失败：%s" % reason
 	extract_pos = Vector2.INF
-	RaidLog.log_event("contract_failed", {"reason": reason})
+	_set_expose(null, false)
+	if kind == Kind.TOWER:
+		fail_ping_t = Tuning.contract_fail_ping_time
+	RaidLog.log_event("contract_failed", {"reason": reason, "kind": kind})
 	if phone_phase == PhonePhase.RINGING:
 		_decline_phone("对方任务已结束")
 	elif phone_phase == PhonePhase.ACCEPTED:
@@ -193,13 +595,21 @@ func fail_contract(reason: String) -> void:
 func tick(delta: float) -> void:
 	# TEMP：暂时关闭「抢回人质」电话合约
 	# _tick_phone(delta)
+	if intel_t > 0.0:
+		intel_t = maxf(0.0, intel_t - delta)
+	if fail_ping_t > 0.0:
+		fail_ping_t = maxf(0.0, fail_ping_t - delta)
 	if phase == Phase.ACTIVE or phase == Phase.EXTRACT:
 		time_left -= delta
 		if time_left <= 0.0:
 			fail_contract("超时失效")
 			return
+	_tick_hold(delta)
 	if phase == Phase.EXTRACT:
-		_tick_extract(delta)
+		if kind == Kind.PURGE:
+			_tick_purge_extract(delta)
+		else:
+			_tick_extract(delta)
 	# TEMP：暂时关闭「抢回人质」
 	# if phone_phase == PhonePhase.ACCEPTED:
 	# 	_tick_snatch(delta)
@@ -329,8 +739,9 @@ func _tick_snatch(delta: float) -> void:
 		snatch_t = maxf(0.0, snatch_t - delta * 1.5)
 
 func _succeed_rescue() -> void:
+	_spawn_reward_chest()
 	phase = Phase.SUCCESS
-	status_line = "合约完成：人质已撤离"
+	status_line = "合约完成：人质已撤离 ｜ 任务点已投放奖励柜"
 	extract_pos = Vector2.INF
 	_despawn_hostage()
 	if phone_phase == PhonePhase.RINGING:
@@ -381,21 +792,20 @@ func _hostage_and_team_in_zone(team: int, pos: Vector2) -> bool:
 	return _team_member_in_zone(team, pos, r)
 
 func _team_member_in_zone(team: int, pos: Vector2, r: float) -> bool:
-	var p = _player()
-	if p != null and is_instance_valid(p) and not p.is_dead() \
-			and int(p.get("team_id")) == team and p.global_position.distance_to(pos) <= r:
-		return true
 	var tree := get_tree()
 	if tree == null:
 		return false
-	for b in tree.get_nodes_in_group("raider_bots"):
-		if not is_instance_valid(b):
+	var nodes: Array = []
+	nodes.append_array(tree.get_nodes_in_group("human_players"))
+	nodes.append_array(tree.get_nodes_in_group("raider_bots"))
+	for n in nodes:
+		if not is_instance_valid(n):
 			continue
-		if b.has_method("is_dead") and b.is_dead():
+		if n.has_method("is_dead") and n.is_dead():
 			continue
-		if int(b.get("team_id")) != team:
+		if int(n.get("team_id")) != team:
 			continue
-		if b.global_position.distance_to(pos) <= r:
+		if n.global_position.distance_to(pos) <= r:
 			return true
 	return false
 
@@ -644,27 +1054,55 @@ func hud_banner() -> String:
 		return "✗ %s" % phone_status
 	match phase:
 		Phase.OFFERED:
-			return "动态合约：%s 免保旁有救援合约点" % offer_poi_name
+			return "动态合约：免保旁有救援 / 静默上传 / 塔台劫持 / 公司清洗"
 		Phase.ACTIVE:
-			if player_is_rescuer():
-				return "合约进行中：救援人质（%s）｜剩余 %.0f 秒" % [hostage_poi_name, time_left]
-			return ""
+			if not player_is_owner():
+				return ""
+			if kind == Kind.UPLOAD:
+				return "静默上传（%s）｜进度 %.0f%% ｜ 剩余 %.0f 秒" % [
+					hostage_poi_name, hold_progress() * 100.0, time_left]
+			if kind == Kind.TOWER:
+				return "塔台劫持（%s）｜进度 %.0f%% ｜ 剩余 %.0f 秒" % [
+					hostage_poi_name, hold_progress() * 100.0, time_left]
+			if kind == Kind.PURGE:
+				return "公司清洗｜击倒标记目标并搜芯片 ｜ 剩余 %.0f 秒" % time_left
+			return "合约进行中：救援人质（%s）｜剩余 %.0f 秒" % [hostage_poi_name, time_left]
 		Phase.EXTRACT:
-			if not player_is_rescuer():
+			if not player_is_owner():
 				return ""
 			var hold2 := ""
 			if extract_t > 0.0:
-				hold2 = " ｜ 撤离 %.0f%%" % (extract_t / maxf(Tuning.contract_extract_hold, 0.01) * 100.0)
+				hold2 = " ｜ 上交 %.0f%%" % (extract_t / maxf(Tuning.contract_extract_hold, 0.01) * 100.0)
+			if kind == Kind.PURGE:
+				return "上交证件芯片｜剩余 %.0f 秒%s" % [time_left, hold2]
 			return "护送人质撤离｜剩余 %.0f 秒%s" % [time_left, hold2]
 		Phase.SUCCESS:
-			return "✅ 合约完成：人质已安全撤离"
+			var pay := " ｜ 去搜任务点奖励柜"
+			if reward_chest != null and is_instance_valid(reward_chest) \
+					and reward_chest.has_method("is_fully_searched") \
+					and reward_chest.is_fully_searched():
+				pay = ""
+			if kind == Kind.UPLOAD:
+				return "✅ 合约完成：数据包已上传%s" % pay
+			if kind == Kind.TOWER:
+				var intel := ""
+				if intel_t > 0.0:
+					intel = " ｜ 全图人形可见 %.0f 秒" % intel_t
+				return "✅ 合约完成：塔台已劫持%s%s" % [intel, pay]
+			if kind == Kind.PURGE:
+				return "✅ 合约完成：证件芯片已上交%s" % pay
+			return "✅ 合约完成：人质已安全撤离%s" % pay
 		Phase.FAILED:
 			if player_is_snatcher() or phone_phase == PhonePhase.SUCCESS:
 				return ""
+			if kind == Kind.TOWER and fail_ping_t > 0.0:
+				return "✗ 占塔失败 ｜ 位置暴露 %.0f 秒" % fail_ping_t
 			return "✗ %s" % status_line
 	return ""
 
 func extract_progress() -> float:
 	if player_is_snatcher():
 		return clampf(snatch_t / maxf(Tuning.contract_extract_hold, 0.01), 0.0, 1.0)
+	if kind == Kind.UPLOAD or kind == Kind.TOWER:
+		return hold_progress()
 	return clampf(extract_t / maxf(Tuning.contract_extract_hold, 0.01), 0.0, 1.0)

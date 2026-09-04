@@ -109,8 +109,12 @@ func next_unsearched_slot() -> int:
 	return -1
 
 func is_fully_searched() -> bool:
-	_ensure_rolled()
-	return next_unsearched_slot() == -1
+	if not _rolled:
+		return false
+	for i in revealed.size():
+		if not revealed[i]:
+			return false
+	return true
 
 func revealed_count() -> int:
 	_ensure_rolled()
@@ -171,7 +175,8 @@ func set_focused(on: bool) -> void:
 
 func _draw() -> void:
 	# 免保始终画；普通武器箱/杂物箱不当常驻地图图标，只在视野内或对准时出现
-	if not is_in_group("free_safe") and not _highlight and not _focused:
+	if not is_in_group("free_safe") and not is_in_group("contract_reward") \
+			and not _highlight and not _focused:
 		return
 	var base := _richness_color()
 	if is_sealed_preview:

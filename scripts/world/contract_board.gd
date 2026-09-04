@@ -3,12 +3,14 @@ extends Area2D
 
 var director = null
 var title := "救援人质"
+var kind: int = 0
 var _focused := false
 var consumed := false
 
-func setup(d, world_pos: Vector2, contract_title: String) -> void:
+func setup(d, world_pos: Vector2, contract_title: String, contract_kind: int = 0) -> void:
 	director = d
 	title = contract_title
+	kind = contract_kind
 	global_position = world_pos
 
 func _ready() -> void:
@@ -48,7 +50,7 @@ func _draw() -> void:
 	draw_arc(Vector2.ZERO, 16.0, 0, TAU, 24, col, 2.4)
 	draw_rect(Rect2(Vector2(-7, -9), Vector2(14, 18)), col, true)
 	draw_rect(Rect2(Vector2(-5, -6), Vector2(10, 3)), Color(0.12, 0.10, 0.08), true)
-	draw_string(ThemeDB.fallback_font, Vector2(-36, -22), "合约",
-		HORIZONTAL_ALIGNMENT_CENTER, 72, 13, col)
+	draw_string(ThemeDB.fallback_font, Vector2(-48, -22), title.substr(0, 6),
+		HORIZONTAL_ALIGNMENT_CENTER, 96, 12, col)
 	if _focused and not consumed:
 		draw_arc(Vector2.ZERO, 22.0, 0, TAU, 28, Color(1.0, 0.95, 0.55), 1.6)

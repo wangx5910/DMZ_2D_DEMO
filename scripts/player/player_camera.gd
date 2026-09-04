@@ -17,11 +17,23 @@ func _ready() -> void:
 	if p == null or NetHub.is_local(int(p.get("peer_id"))):
 		make_current()
 
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		var p = get_parent()
+		if p != null and bool(p.get("ui_capturing_mouse")):
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			Tuning.camera_zoom = minf(Tuning.camera_zoom_max, Tuning.camera_zoom * 1.08)
+			get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			Tuning.camera_zoom = maxf(Tuning.camera_zoom_min, Tuning.camera_zoom / 1.08)
+			get_viewport().set_input_as_handled()
+
 func _process(delta: float) -> void:
 	var p = get_parent()
 	if p == null:
 		return
-	zoom = Vector2.ONE * Tuning.camera_zoom
+	zoom = Vector2.ONE * clampf(Tuning.camera_zoom, Tuning.camera_zoom_min, Tuning.camera_zoom_max)
 
 	var ahead := Vector2.ZERO
 	if Tuning.camera_look_ahead > 0.0:

@@ -4,7 +4,7 @@ extends CharacterBody2D
 ## - 冲免保途中遇怪先清；怪也会打 AI（与打玩家同规则）
 ## - 冲刺途中随机晃荡，约浪费 1/10 行程时间
 
-enum S { RUSH_SAFE, OPEN_SAFE, LOOT, ROAM, COMBAT, CONTEST_SHIP, CONTRACT, DEAD }
+enum S { RUSH_SAFE, OPEN_SAFE, LOOT, ROAM, COMBAT, CONTEST_SHIP, CONTRACT, CONTEST_DEPOT, DEAD }
 
 const RADIUS := 11.0
 const HitscanScript := preload("res://scripts/combat/hitscan.gd")
@@ -46,6 +46,8 @@ var _name_tag := "掠夺者AI"
 var _resume_state: int = S.RUSH_SAFE
 var first_safe_done: bool = false
 var carried_hostage = null
+var contract_mark := false
+var contract_expose := false
 
 ## 搜刮读条（对齐玩家：先破解 → 逐格揭示 → 再装包）
 enum SearchPhase { NONE, CRACK, REVEAL, TAKE }
@@ -156,6 +158,15 @@ func _apply_vision_policy() -> void:
 func is_dead() -> bool:
 	return state == S.DEAD or (health != null and health.dead)
 
+func mark_for_contract() -> void:
+	contract_mark = true
+	add_to_group("contract_marks")
+	if health != null:
+		health.reset(health.hp_max * 1.4)
+	if inv != null:
+		inv.grant_no_weight("corp_id_chip")
+	queue_redraw()
+
 func take_damage(amount: float, from: Vector2) -> void:
 	if is_dead() or health == null:
 		return
@@ -186,6 +197,10 @@ func _on_died(_from: Vector2) -> void:
 		exit_ship(drop)
 	_drop_corpse_bag()
 	remove_from_group("raider_bots")
+	if contract_mark:
+		var dir = get_tree().get_first_node_in_group("contract_director")
+		if dir != null and dir.has_method("on_mark_killed"):
+			dir.on_mark_killed(self)
 	if is_in_group("vision_gated"):
 		remove_from_group("vision_gated")
 	# 尸体留在死亡时的可见状态；已看到才看得见
@@ -226,7 +241,8 @@ func _physics_process(delta: float) -> void:
 	const LOD_NEAR_PX := 3600.0   # 450m
 	const LOD_FAR_PX := 5600.0    # 700m
 	var skip_lod: bool = aboard_ship != null or state == S.CONTRACT \
-			or carried_hostage != null or _want_rescue_contract()
+			or state == S.CONTEST_DEPOT \
+			or carried_hostage != null or _want_rescue_contract() or _want_contest_depot()
 	if not skip_lod and d2 > LOD_FAR_PX * LOD_FAR_PX:
 		if frame % 8 != slot:
 			move_and_slide()
@@ -278,6 +294,16 @@ func _physics_process(delta: float) -> void:
 				if state != S.CONTRACT:
 					_abort_search()
 				state = S.CONTRACT
+		elif _want_contest_depot():
+			if state == S.COMBAT and not _is_enemy_player(combat_target):
+				_clear_cover_combat()
+				combat_target = null
+				state = S.CONTEST_DEPOT
+			elif state != S.COMBAT:
+				if state != S.CONTEST_DEPOT:
+					_abort_search()
+					_resume_state = state if state != S.OPEN_SAFE else S.RUSH_SAFE
+				state = S.CONTEST_DEPOT
 		elif state != S.COMBAT and _want_contest_ship():
 			if state != S.CONTEST_SHIP:
 				_abort_search()
@@ -294,6 +320,7 @@ func _physics_process(delta: float) -> void:
 		S.COMBAT: _tick_combat(delta)
 		S.CONTEST_SHIP: _tick_contest_ship(delta)
 		S.CONTRACT: _tick_contract(delta)
+		S.CONTEST_DEPOT: _tick_contest_depot(delta)
 		S.DEAD:
 			velocity = Vector2.ZERO
 	move_and_slide()
@@ -313,6 +340,11 @@ func _player_pos() -> Vector2:
 
 ## 远距简化：只推进目标，不做交战感知/绕障射线
 func _tick_lod_far(delta: float) -> void:
+	if _want_contest_depot():
+		state = S.CONTEST_DEPOT
+		_tick_contest_depot(delta)
+		move_and_slide()
+		return
 	if _want_contest_ship():
 		state = S.CONTEST_SHIP
 		_tick_contest_ship(delta)
@@ -357,6 +389,45 @@ func _finish_open_safe_lod() -> void:
 	_vacuum_container(target_safe)
 	first_safe_done = true
 	state = S.LOOT
+
+func _want_contest_depot() -> bool:
+	if world == null or not world.has_method("nearest_hot_depot"):
+		return false
+	var max_px: float = Tuning.depot_ai_rush_m * 8.0
+	return world.nearest_hot_depot(global_position, max_px) != null
+
+func _tick_contest_depot(delta: float) -> void:
+	if not _want_contest_depot():
+		state = _resume_state if _resume_state != S.CONTEST_DEPOT else S.LOOT
+		return
+	var d = world.nearest_hot_depot(global_position, Tuning.depot_ai_rush_m * 8.0)
+	if d == null or not is_instance_valid(d):
+		state = S.LOOT
+		return
+	var pos: Vector2 = d.global_position
+	var dist: float = global_position.distance_to(pos)
+	if dist > Tuning.interact_range * 1.15:
+		var spd: float = Tuning.sprint_speed if dist > 220.0 else Tuning.walk_speed
+		_move_towards(pos, spd, delta)
+		_face(pos, delta)
+		return
+	velocity = Vector2.ZERO
+	_face(pos, delta)
+	# 呼叫中：占点等待；出现后有物资就提交并关掉此点
+	if d.has_method("is_open") and d.is_open():
+		if inv != null and inv.has_method("total_value") and int(inv.total_value()) > 0:
+			_open_t += delta
+			if _open_t >= 1.6:
+				_open_t = 0.0
+				var pay: int = int(round(float(inv.total_value()) * maxf(float(d.mul), 1.0)))
+				if inv.has_method("clear"):
+					inv.clear()
+				_loot_value += pay
+				if d.has_method("consume"):
+					d.consume()
+				state = S.LOOT
+			return
+	_open_t = 0.0
 
 func _want_contest_ship() -> bool:
 	if world == null or not Tuning.enable_spaceship_hijack:
@@ -1452,10 +1523,16 @@ func _draw() -> void:
 		col = Color(1.0, 0.78, 0.28) if team_id != 0 else Color(0.55, 1.0, 0.65)
 	elif state == S.CONTRACT:
 		col = Color(0.45, 0.92, 1.0) if team_id != 0 else Color(0.55, 1.0, 0.75)
+	elif state == S.CONTEST_DEPOT:
+		col = Color(0.82, 0.38, 1.0) if team_id != 0 else Color(0.72, 0.55, 1.0)
 	elif state == S.DEAD:
 		col = Color(0.35, 0.35, 0.38)
 	draw_circle(Vector2.ZERO, RADIUS + 1.4, Color(0.05, 0.08, 0.1, 0.85))
 	draw_circle(Vector2.ZERO, RADIUS, col)
+	if contract_mark:
+		draw_arc(Vector2.ZERO, RADIUS + 5.0, 0, TAU, 22, Color(1.0, 0.82, 0.28, 0.95), 2.2)
+	if contract_expose:
+		draw_arc(Vector2.ZERO, RADIUS + 8.0, 0, TAU, 24, Color(0.35, 0.95, 1.0, 0.85), 2.0)
 	var tip := Vector2(RADIUS + 7, 0)
 	draw_colored_polygon(PackedVector2Array([tip, Vector2(RADIUS * 0.2, -4), Vector2(RADIUS * 0.2, 4)]),
 		Color(0.95, 1.0, 1.0, 0.95))
