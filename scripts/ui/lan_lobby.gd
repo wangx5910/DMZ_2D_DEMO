@@ -161,17 +161,15 @@ func _build() -> void:
 	col.add_child(_status)
 
 	var tip := Label.new()
-	tip.text = "跨网必须两边都开 Tailscale。首次开房若弹防火墙，专用和公用都勾上。端口 UDP %d / %d。" % [
-		NetHub.DEFAULT_PORT, NetHub.DISCOVERY_PORT]
+	tip.text = "找不到房间请手填 IP。公司网请放行 TCP %d（远程桌面那种）。两边都要允许 Godot 过防火墙。" % [
+		NetHub.DEFAULT_PORT]
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.add_theme_font_size_override("font_size", 11)
 	tip.add_theme_color_override("font_color", Color(0.50, 0.56, 0.64))
 	col.add_child(tip)
 
 func _banner_text() -> String:
-	if NetHub.has_tailscale():
-		return "Tailscale 已接通。一人开房，把 100.x 发给同伴（不必同一 Wi-Fi）。"
-	return "未检测到 Tailscale。公司网拦局域网时，两边安装并登录同一网络，再用 100.x 互连。"
+	return "同一公司内网：一人开房，其他人填房主 IP。走 TCP %d。" % NetHub.DEFAULT_PORT
 
 func _refresh_net_labels() -> void:
 	if _banner != null:

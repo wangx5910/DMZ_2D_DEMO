@@ -1,9 +1,9 @@
 extends Node
-## NetHub · 局域网 / Tailscale 联机（ENet）
+## NetHub · 联机（WebSocket / TCP）
 ##
 ## 房主权威：世界 seed、AI、伤害结算。各端只操控自己的角色。
 ## 单机 mode=SOLO，行为与接入前一致。
-## 跨网：两边装 Tailscale 并登录同一 tailnet，用 100.x 地址互连。
+## 公司内网常拦 UDP，故传输用 WebSocket（TCP），大厅手填 IP 即可。
 
 enum Mode { SOLO, HOST, CLIENT }
 
@@ -24,6 +24,7 @@ const MAX_PLAYERS := 8
 const STATE_HZ := 15.0
 const AI_HZ := 8.0
 const HUMAN_TEAM_BASE := 10000
+const JOIN_TIMEOUT := 10.0
 
 var mode: Mode = Mode.SOLO
 var local_peer_id: int = 1
@@ -36,7 +37,7 @@ var discovered: Array = []          ## [{ip, port, name, n, age}]
 var pending_peers: PackedInt32Array = []
 var spawn_slot: Dictionary = {}     ## peer_id -> 出生槽（0=房主点，其后按距房主由近到远）
 
-var _peer: ENetMultiplayerPeer = null
+var _peer: MultiplayerPeer = null
 var _udp: PacketPeerUDP = null
 var _udp_listen: PacketPeerUDP = null
 var _discover_t := 0.0
@@ -48,6 +49,7 @@ var ts_peers: Array = []          ## [{ip, name, online, dns}]
 var _ts_refresh_t := 4.5
 var _ts_exe := ""
 var _ts_exe_checked := false
+var _join_wait := 0.0
 
 func is_online() -> bool:
 	return mode != Mode.SOLO
@@ -212,6 +214,8 @@ func _maybe_add_lan_ip(rows: Array, seen: Dictionary, ip: String, iface_name: St
 	if ip.begins_with("192.168.56.") or ip.begins_with("192.168.137.") \
 			or ip.begins_with("192.168.192.") or ip.begins_with("192.168.255."):
 		score -= 25
+	if ip.begins_with("9."):
+		score += 35
 	# 公司内网常见 30.x，对端不在同一 ACL 时连不上
 	if ip.begins_with("30."):
 		score -= 15
@@ -352,8 +356,8 @@ func _rpc_lock_clear(key: String) -> void:
 func host_lan(port: int = DEFAULT_PORT) -> Error:
 	leave_lan()
 	bind_port = port
-	var peer := ENetMultiplayerPeer.new()
-	var err: Error = peer.create_server(port, MAX_PLAYERS)
+	var peer := WebSocketMultiplayerPeer.new()
+	var err: Error = peer.create_server(port, "*")
 	if err != OK:
 		net_message.emit("开房失败（端口 %d 被占用？）" % port)
 		return err
@@ -374,10 +378,7 @@ func host_lan(port: int = DEFAULT_PORT) -> Error:
 	var shown: String = tailscale_ip()
 	if shown == "":
 		shown = primary_ip()
-	if has_tailscale():
-		net_message.emit("已开房  Tailscale %s:%d  ← 把这个发给同伴" % [shown, port])
-	else:
-		net_message.emit("已开房  %s:%d（未检测到 Tailscale，跨网请先两边安装）" % [shown, port])
+	net_message.emit("已开房  %s:%d  （TCP，把这个 IP 填进同伴的「房主 IP」）" % [shown, port])
 	var extras: PackedStringArray = []
 	for e in lan_addresses():
 		var ip: String = str(e.get("ip", ""))
@@ -392,6 +393,7 @@ func join_lan(ip: String, port: int = DEFAULT_PORT) -> Error:
 	leave_lan()
 	join_ip = ip.strip_edges().trim_suffix(".")
 	bind_port = port
+	_join_wait = 0.0
 	if join_ip == "":
 		return ERR_INVALID_PARAMETER
 	if not _looks_ipv4(join_ip):
@@ -399,10 +401,11 @@ func join_lan(ip: String, port: int = DEFAULT_PORT) -> Error:
 		if resolved != "":
 			join_ip = resolved
 		else:
-			net_message.emit("无法解析 %s（可用 Tailscale 的 100.x 或 MagicDNS 名）" % ip.strip_edges())
+			net_message.emit("无法解析 %s" % ip.strip_edges())
 			return ERR_CANT_RESOLVE
-	var peer := ENetMultiplayerPeer.new()
-	var err: Error = peer.create_client(join_ip, port)
+	var peer := WebSocketMultiplayerPeer.new()
+	var url := "ws://%s:%d" % [join_ip, port]
+	var err: Error = peer.create_client(url)
 	if err != OK:
 		net_message.emit("连接失败")
 		return err
@@ -431,6 +434,7 @@ func leave_lan() -> void:
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer = null
 	_peer = null
+	_join_wait = 0.0
 	mode = Mode.SOLO
 	local_peer_id = 1
 	player_nodes.clear()
@@ -523,7 +527,7 @@ func _on_connected_ok() -> void:
 	net_message.emit("已连上房主，等待地图种子…")
 
 func _on_connected_fail() -> void:
-	net_message.emit("连接失败：检查 IP、端口和防火墙")
+	net_message.emit("连接失败：检查 IP、端口和 Windows 防火墙（需放行 TCP %d）" % bind_port)
 	leave_lan()
 
 func _on_server_drop() -> void:
@@ -886,6 +890,17 @@ func _append_ts_peer(rows: Array, self_ips: Dictionary, item) -> void:
 	})
 
 func _process(delta: float) -> void:
+	if _peer != null:
+		_peer.poll()
+	if mode == Mode.CLIENT and _peer != null \
+			and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTING:
+		_join_wait += delta
+		if _join_wait >= JOIN_TIMEOUT:
+			var msg := "连接超时：10 秒内没连上 %s:%d。云服务器先点「创建房间」，两边防火墙放行 TCP %d。" \
+				% [join_ip, bind_port, bind_port]
+			leave_lan()
+			net_message.emit(msg)
+			return
 	_poll_udp()
 	if mode == Mode.CLIENT and _udp != null:
 		_discover_t += delta
